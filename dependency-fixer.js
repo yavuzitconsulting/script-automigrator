@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// fix-deps.js v6
+// fix-deps.js v7
 // fixes third-party dependencies after ng-upgrade-step.js has run
 // bumps companion packages to versions compatible with the detected angular version
 "use strict";
@@ -9,7 +9,7 @@ var path = require("path");
 var child_process = require("child_process");
 var spawnSync = child_process.spawnSync;
 
-var SCRIPT_VERSION = 6;
+var SCRIPT_VERSION = 7;
 
 // ============================================================================
 // compatibility map
@@ -572,8 +572,9 @@ function cleanBeforeInstall() {
 function runNpmInstall() {
   cleanBeforeInstall();
 
-  console.log("\n  running npm install --force --legacy-peer-deps --loglevel verbose ...\n");
-  var res = spawnSync("npm", ["install", "--force", "--legacy-peer-deps", "--loglevel", "verbose"], {
+  // --omit=optional skips optional deps like kendo-angular-schematics that may not be in registry
+  console.log("\n  running npm install --force --legacy-peer-deps --omit=optional ...\n");
+  var res = spawnSync("npm", ["install", "--force", "--legacy-peer-deps", "--omit=optional"], {
     stdio: "inherit", shell: true, timeout: 600000, cwd: process.cwd()
   });
   return res.status === 0;
@@ -688,7 +689,7 @@ function main() {
     }
     console.log("\n  done. try 'ng build' to see if there are remaining issues.");
   } else {
-    console.log("\n  package.json updated. run 'npm install --force --legacy-peer-deps' when ready.");
+    console.log("\n  package.json updated. run 'npm install --force --legacy-peer-deps --omit=optional' when ready.");
   }
 
   // post-install notes
