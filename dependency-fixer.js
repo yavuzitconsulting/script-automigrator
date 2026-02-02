@@ -540,15 +540,14 @@ function main() {
   if (process.argv.includes("--help")) {
     console.log("\nfix-deps.js -- fix third-party deps after angular upgrade\n");
     console.log("  node fix-deps.js             dry run (show what would change)");
-    console.log("  node fix-deps.js --yes        apply changes + npm install");
+    console.log("  node fix-deps.js --yes        apply changes + npm install (recommended)");
     console.log("  node fix-deps.js --update     apply changes only (no npm install)");
-    console.log("  node fix-deps.js --resolve    resolve versions from registry (for restricted registries)");
-    console.log("  node fix-deps.js --verbose    show detailed registry queries");
+    console.log("  node fix-deps.js --no-resolve skip registry resolution (use hardcoded versions)");
+    console.log("  node fix-deps.js --quiet      suppress verbose output");
     console.log("  node fix-deps.js --help       this message");
-    console.log("\nexamples:");
-    console.log("  node fix-deps.js --yes --resolve           apply + install with registry resolution");
-    console.log("  node fix-deps.js --update --resolve        update package.json only with registry resolution");
-    console.log("  node fix-deps.js --yes --resolve --verbose full verbose output");
+    console.log("\nnotes:");
+    console.log("  - registry resolution is ON by default (queries npm for available versions)");
+    console.log("  - verbose output is ON by default (shows registry queries)");
     process.exit(0);
   }
 
@@ -562,12 +561,12 @@ function main() {
 
   var doApply = process.argv.includes("--yes") || process.argv.includes("--update");
   var doInstall = process.argv.includes("--yes");
-  var doResolve = process.argv.includes("--resolve");
-  var doVerbose = process.argv.includes("--verbose");
+  // --resolve and --verbose are ON by default, use --no-resolve / --quiet to disable
+  var doResolve = !process.argv.includes("--no-resolve");
+  var doVerbose = !process.argv.includes("--quiet");
 
   if (!doApply) {
     console.log("\n  dry run. use --yes to apply changes and install, or --update to just update package.json.");
-    console.log("  add --resolve to query registry for available versions (recommended for restricted registries).");
     process.exit(0);
   }
 
