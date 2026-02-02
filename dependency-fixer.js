@@ -42,6 +42,8 @@ var COMPAT = {
     // latest is 22.x but we'll target ~22.0.1 (supports angular 19-21).
     // the script will apply the same version to ALL @progress/kendo-angular-* packages.
     "@progress/kendo-angular-*": "~22.0.1",
+    // schematics package may lag behind main kendo packages, resolve from registry
+    "@progress/kendo-angular-schematics": "latest",
     // kendo companion packages
     "@progress/kendo-data-query": "^1.7.0",
     "@progress/kendo-drawing": "^1.20.0",
@@ -225,24 +227,56 @@ function findBestVersion(versions, wanted) {
 // registry resolution
 // ============================================================================
 
-function getAllVersions(name) {
+function getAllVersions(name, verbose) {
+  if (verbose) console.log("    > npm view " + name + " versions");
   var r = spawnSync("npm", ["view", "--json", name, "versions"], { encoding: "utf8", timeout: 60000, shell: true });
-  if (r.status !== 0) return null;
+  if (r.status !== 0) {
+    if (verbose) console.log("    ! registry query failed for " + name);
+    return null;
+  }
   try {
     var p = JSON.parse(r.stdout.trim());
-    return typeof p === "string" ? [p] : Array.isArray(p) ? p : null;
+    var vers = typeof p === "string" ? [p] : Array.isArray(p) ? p : null;
+    if (verbose && vers) console.log("    found " + vers.length + " versions");
+    return vers;
+  } catch (_) {
+    if (verbose) console.log("    ! failed to parse registry response for " + name);
+    return null;
+  }
+}
+
+function getLatestVersion(name, verbose) {
+  if (verbose) console.log("    > npm view " + name + " version (latest)");
+  var r = spawnSync("npm", ["view", "--json", name, "version"], { encoding: "utf8", timeout: 60000, shell: true });
+  if (r.status !== 0) return null;
+  try {
+    return JSON.parse(r.stdout.trim());
   } catch (_) { return null; }
 }
 
-function resolveVersion(name, wanted) {
-  var vers = getAllVersions(name);
+function resolveVersion(name, wanted, verbose) {
+  // handle "latest" keyword
+  if (wanted === "latest") {
+    var latest = getLatestVersion(name, verbose);
+    if (latest) {
+      console.log("    " + name + ": latest -> " + latest);
+      return latest;
+    }
+    console.log("    warning: could not resolve 'latest' for " + name);
+    return wanted;
+  }
+
+  var vers = getAllVersions(name, verbose);
   if (!vers || !vers.length) {
-    console.log("    warning: '" + name + "' not in registry, using wanted version");
+    console.log("    warning: '" + name + "' not in registry, using wanted version: " + wanted);
     return wanted;
   }
   var picked = findBestVersion(vers, wanted);
-  if (picked !== wanted.replace(/^[\^~>=<\s]+/, "")) {
-    console.log("    resolved " + name + ": " + wanted + " -> " + picked);
+  var wantedClean = wanted.replace(/^[\^~>=<\s]+/, "");
+  if (picked !== wantedClean) {
+    console.log("    " + name + ": " + wanted + " -> " + picked + " (best available)");
+  } else {
+    if (verbose) console.log("    " + name + ": " + wanted + " (exact match)");
   }
   return picked;
 }
@@ -268,6 +302,11 @@ function analyzeProject(angularMajor) {
   var removals = [];   // { name, section }
   var kendoUpdates = []; // separate because we glob them
 
+  // collect explicit kendo package names (these take precedence over wildcard)
+  var explicitKendoPackages = Object.keys(compat).filter(function (name) {
+    return name.indexOf("@progress/kendo-angular-") === 0 && name !== "@progress/kendo-angular-*";
+  });
+
   // check each package in our compat map
   Object.keys(compat).forEach(function (name) {
     if (name === "__remove__") return;
@@ -279,6 +318,9 @@ function analyzeProject(angularMajor) {
       // find all @progress/kendo-angular-* packages in the project
       Object.keys(allDeps).forEach(function (depName) {
         if (depName.indexOf("@progress/kendo-angular-") === 0) {
+          // skip packages that have explicit entries (they'll be handled separately)
+          if (explicitKendoPackages.indexOf(depName) !== -1) return;
+
           var current = allDeps[depName];
           var section = deps[depName] ? "dependencies" : "devDependencies";
           var currentClean = current.replace(/^[\^~>=<\s]+/, "");
@@ -357,21 +399,27 @@ function analyzeProject(angularMajor) {
 // apply changes
 // ============================================================================
 
-function applyChanges(analysis, useResolve) {
+function applyChanges(analysis, useResolve, verbose) {
   var pkg = readPkgJson();
   var changed = 0;
 
   // helper to get the final version (resolve from registry if enabled)
   function getVersion(name, wanted) {
     if (!useResolve) return wanted;
-    var resolved = resolveVersion(name, wanted);
+    var resolved = resolveVersion(name, wanted, verbose);
+    // handle "latest" - don't add prefix
+    if (wanted === "latest") return resolved;
     // preserve the prefix (^ or ~) from wanted, but use resolved version number
     var prefix = wanted.match(/^[\^~]/);
     return (prefix ? prefix[0] : "") + resolved;
   }
 
   // apply updates
-  console.log("\n  resolving package versions...");
+  if (useResolve) {
+    console.log("\n  resolving package versions from registry...");
+  } else {
+    console.log("\n  applying package versions...");
+  }
   analysis.updates.forEach(function (u) {
     if (pkg[u.section] && pkg[u.section][u.name]) {
       pkg[u.section][u.name] = getVersion(u.name, u.to);
@@ -422,9 +470,9 @@ function applyChanges(analysis, useResolve) {
 // ============================================================================
 
 function runNpmInstall() {
-  console.log("\n  running npm install --force ...\n");
-  var res = spawnSync("npm", ["install", "--force"], {
-    stdio: "inherit", shell: true, timeout: 300000, cwd: process.cwd()
+  console.log("\n  running npm install --force --loglevel verbose ...\n");
+  var res = spawnSync("npm", ["install", "--force", "--loglevel", "verbose"], {
+    stdio: "inherit", shell: true, timeout: 600000, cwd: process.cwd()
   });
   return res.status === 0;
 }
@@ -495,9 +543,12 @@ function main() {
     console.log("  node fix-deps.js --yes        apply changes + npm install");
     console.log("  node fix-deps.js --update     apply changes only (no npm install)");
     console.log("  node fix-deps.js --resolve    resolve versions from registry (for restricted registries)");
+    console.log("  node fix-deps.js --verbose    show detailed registry queries");
     console.log("  node fix-deps.js --help       this message");
     console.log("\nexamples:");
-    console.log("  node fix-deps.js --update --resolve   update package.json with registry-resolved versions");
+    console.log("  node fix-deps.js --yes --resolve           apply + install with registry resolution");
+    console.log("  node fix-deps.js --update --resolve        update package.json only with registry resolution");
+    console.log("  node fix-deps.js --yes --resolve --verbose full verbose output");
     process.exit(0);
   }
 
@@ -512,6 +563,7 @@ function main() {
   var doApply = process.argv.includes("--yes") || process.argv.includes("--update");
   var doInstall = process.argv.includes("--yes");
   var doResolve = process.argv.includes("--resolve");
+  var doVerbose = process.argv.includes("--verbose");
 
   if (!doApply) {
     console.log("\n  dry run. use --yes to apply changes and install, or --update to just update package.json.");
@@ -521,10 +573,7 @@ function main() {
 
   // apply
   console.log("\n  applying changes to package.json ...");
-  if (doResolve) {
-    console.log("  (resolving versions from registry)");
-  }
-  var changed = applyChanges(analysis, doResolve);
+  var changed = applyChanges(analysis, doResolve, doVerbose);
   console.log("  updated " + changed + " entries.");
 
   if (doInstall) {
