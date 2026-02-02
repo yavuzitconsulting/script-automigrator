@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// fix-deps.js v4
+// fix-deps.js v5
 // fixes third-party dependencies after ng-upgrade-step.js has run
 // bumps companion packages to versions compatible with the detected angular version
 "use strict";
@@ -9,7 +9,7 @@ var path = require("path");
 var child_process = require("child_process");
 var spawnSync = child_process.spawnSync;
 
-var SCRIPT_VERSION = 4;
+var SCRIPT_VERSION = 5;
 
 // ============================================================================
 // compatibility map
@@ -372,6 +372,12 @@ function analyzeProject(angularMajor) {
     return name.indexOf("@progress/kendo-angular-") === 0 && name !== "@progress/kendo-angular-*";
   });
 
+  // collect packages marked for removal (should not be updated by wildcard)
+  var packagesToRemove = (compat["__remove__"] || []).concat(
+    compat["__remove_pinned__"] || [],
+    compat["__remove_overrides__"] || []
+  );
+
   // check each package in our compat map
   Object.keys(compat).forEach(function (name) {
     if (name === "__remove__") return;
@@ -385,6 +391,8 @@ function analyzeProject(angularMajor) {
         if (depName.indexOf("@progress/kendo-angular-") === 0) {
           // skip packages that have explicit entries (they'll be handled separately)
           if (explicitKendoPackages.indexOf(depName) !== -1) return;
+          // skip packages marked for removal
+          if (packagesToRemove.indexOf(depName) !== -1) return;
 
           var current = allDeps[depName];
           var section = deps[depName] ? "dependencies" : "devDependencies";
