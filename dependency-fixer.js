@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// fix-deps.js v3
+// fix-deps.js v4
 // fixes third-party dependencies after ng-upgrade-step.js has run
 // bumps companion packages to versions compatible with the detected angular version
 "use strict";
@@ -9,7 +9,7 @@ var path = require("path");
 var child_process = require("child_process");
 var spawnSync = child_process.spawnSync;
 
-var SCRIPT_VERSION = 3;
+var SCRIPT_VERSION = 4;
 
 // ============================================================================
 // compatibility map
@@ -27,8 +27,10 @@ var COMPAT = {
     "tslib": "^2.3.0",
     "typescript": "~5.8.3",
 
-    // -- angular devkit / build --
-    "@angular-devkit/build-angular": "~20.0.1",
+    // -- angular build packages --
+    // Angular 20 uses @angular/build by default (replaces @angular-devkit/build-angular)
+    "@angular/build": "~20.0.1",
+    "@angular-devkit/build-angular": "~20.0.1", // still works as fallback
     "@angular-devkit/build-ng-packagr": null, // removed in v17+, delete if present
     "@angular/language-service": "~20.0.1",
 
@@ -168,6 +170,70 @@ function readPkgJson() {
 
 function writePkgJson(obj) {
   fs.writeFileSync("package.json", JSON.stringify(obj, null, 2) + "\n", "utf8");
+}
+
+function readAngularJson() {
+  if (!fs.existsSync("angular.json")) return null;
+  return JSON.parse(fs.readFileSync("angular.json", "utf8"));
+}
+
+function writeAngularJson(obj) {
+  fs.writeFileSync("angular.json", JSON.stringify(obj, null, 2) + "\n", "utf8");
+}
+
+// ============================================================================
+// angular.json fixes (for Angular 17+)
+// ============================================================================
+
+function fixAngularJson() {
+  var angularJson = readAngularJson();
+  if (!angularJson) {
+    console.log("  no angular.json found, skipping angular.json fixes");
+    return;
+  }
+
+  var changed = false;
+  var changes = [];
+
+  // remove defaultProject (deprecated in Angular 15+)
+  if (angularJson.defaultProject !== undefined) {
+    delete angularJson.defaultProject;
+    changed = true;
+    changes.push("removed deprecated 'defaultProject'");
+  }
+
+  // update builders from :browser to :application
+  if (angularJson.projects) {
+    Object.keys(angularJson.projects).forEach(function (projectName) {
+      var project = angularJson.projects[projectName];
+      if (project.architect) {
+        Object.keys(project.architect).forEach(function (targetName) {
+          var target = project.architect[targetName];
+          if (target.builder) {
+            // update browser -> application
+            if (target.builder === "@angular-devkit/build-angular:browser") {
+              target.builder = "@angular-devkit/build-angular:application";
+              changed = true;
+              changes.push(projectName + "." + targetName + ": browser -> application builder");
+            }
+            // update to new @angular/build package (optional, for full migration)
+            // if (target.builder === "@angular-devkit/build-angular:application") {
+            //   target.builder = "@angular/build:application";
+            //   changed = true;
+            // }
+          }
+        });
+      }
+    });
+  }
+
+  if (changed) {
+    writeAngularJson(angularJson);
+    console.log("\n  angular.json fixes applied:");
+    changes.forEach(function (c) { console.log("    - " + c); });
+  } else {
+    console.log("  angular.json looks ok, no changes needed");
+  }
 }
 
 function detectAngularVersion() {
@@ -598,10 +664,13 @@ function main() {
     process.exit(0);
   }
 
-  // apply
+  // apply package.json changes
   console.log("\n  applying changes to package.json ...");
   var changed = applyChanges(analysis, doResolve, doVerbose);
   console.log("  updated " + changed + " entries.");
+
+  // fix angular.json
+  fixAngularJson();
 
   if (doInstall) {
     var ok = runNpmInstall();
