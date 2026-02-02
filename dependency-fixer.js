@@ -50,9 +50,9 @@ var COMPAT = {
     "@progress/kendo-theme-material": "^12.2.0",
 
     // -- ng-bootstrap --
-    // ng-bootstrap 19.x supports angular 19-20
+    // ng-bootstrap 19.x supports angular 20
     // ng-bootstrap 20.x requires angular 21
-    "@ng-bootstrap/ng-bootstrap": "~19.2.0",
+    "@ng-bootstrap/ng-bootstrap": "~19.0.1",
 
     // -- bootstrap css --
     // ng-bootstrap 17+ requires bootstrap 5.3+
@@ -185,6 +185,69 @@ function getNpmVersion() {
 }
 
 // ============================================================================
+// semver utilities (from ng-upgrade-step.js)
+// ============================================================================
+
+function parseSemver(v) {
+  var m = String(v).match(/^(\d+)\.(\d+)\.(\d+)/);
+  return m ? { major: +m[1], minor: +m[2], patch: +m[3] } : null;
+}
+
+function compareSemver(a, b) {
+  var pa = parseSemver(a), pb = parseSemver(b);
+  if (!pa || !pb) return 0;
+  return pa.major !== pb.major ? pa.major - pb.major : pa.minor !== pb.minor ? pa.minor - pb.minor : pa.patch - pb.patch;
+}
+
+function findBestVersion(versions, wanted) {
+  var clean = wanted.replace(/^[\^~>=<\s]+/, "");
+  var target = parseSemver(clean);
+  if (!target) return versions[versions.length - 1];
+  // filter to stable versions only (no alpha/beta/rc), then sort
+  var stable = versions.filter(function (v) { return parseSemver(v); }).sort(compareSemver);
+  // exact match
+  var exact = stable.find(function (v) { return v === clean; });
+  if (exact) return exact;
+  // same major, >= wanted
+  var sameMajGe = stable.filter(function (v) { var p = parseSemver(v); return p.major === target.major && compareSemver(v, clean) >= 0; });
+  if (sameMajGe.length) return sameMajGe[0];
+  // same major, any version (take highest)
+  var sameMaj = stable.filter(function (v) { return parseSemver(v).major === target.major; });
+  if (sameMaj.length) return sameMaj[sameMaj.length - 1];
+  // any higher version
+  var higher = stable.filter(function (v) { return compareSemver(v, clean) >= 0; });
+  if (higher.length) return higher[0];
+  // fallback to latest
+  return stable[stable.length - 1];
+}
+
+// ============================================================================
+// registry resolution
+// ============================================================================
+
+function getAllVersions(name) {
+  var r = spawnSync("npm", ["view", "--json", name, "versions"], { encoding: "utf8", timeout: 60000, shell: true });
+  if (r.status !== 0) return null;
+  try {
+    var p = JSON.parse(r.stdout.trim());
+    return typeof p === "string" ? [p] : Array.isArray(p) ? p : null;
+  } catch (_) { return null; }
+}
+
+function resolveVersion(name, wanted) {
+  var vers = getAllVersions(name);
+  if (!vers || !vers.length) {
+    console.log("    warning: '" + name + "' not in registry, using wanted version");
+    return wanted;
+  }
+  var picked = findBestVersion(vers, wanted);
+  if (picked !== wanted.replace(/^[\^~>=<\s]+/, "")) {
+    console.log("    resolved " + name + ": " + wanted + " -> " + picked);
+  }
+  return picked;
+}
+
+// ============================================================================
 // analysis
 // ============================================================================
 
@@ -294,14 +357,24 @@ function analyzeProject(angularMajor) {
 // apply changes
 // ============================================================================
 
-function applyChanges(analysis) {
+function applyChanges(analysis, useResolve) {
   var pkg = readPkgJson();
   var changed = 0;
 
+  // helper to get the final version (resolve from registry if enabled)
+  function getVersion(name, wanted) {
+    if (!useResolve) return wanted;
+    var resolved = resolveVersion(name, wanted);
+    // preserve the prefix (^ or ~) from wanted, but use resolved version number
+    var prefix = wanted.match(/^[\^~]/);
+    return (prefix ? prefix[0] : "") + resolved;
+  }
+
   // apply updates
+  console.log("\n  resolving package versions...");
   analysis.updates.forEach(function (u) {
     if (pkg[u.section] && pkg[u.section][u.name]) {
-      pkg[u.section][u.name] = u.to;
+      pkg[u.section][u.name] = getVersion(u.name, u.to);
       changed++;
     }
   });
@@ -309,7 +382,7 @@ function applyChanges(analysis) {
   // apply kendo updates
   analysis.kendoUpdates.forEach(function (u) {
     if (pkg[u.section] && pkg[u.section][u.name]) {
-      pkg[u.section][u.name] = u.to;
+      pkg[u.section][u.name] = getVersion(u.name, u.to);
       changed++;
     }
   });
@@ -421,7 +494,10 @@ function main() {
     console.log("  node fix-deps.js             dry run (show what would change)");
     console.log("  node fix-deps.js --yes        apply changes + npm install");
     console.log("  node fix-deps.js --update     apply changes only (no npm install)");
+    console.log("  node fix-deps.js --resolve    resolve versions from registry (for restricted registries)");
     console.log("  node fix-deps.js --help       this message");
+    console.log("\nexamples:");
+    console.log("  node fix-deps.js --update --resolve   update package.json with registry-resolved versions");
     process.exit(0);
   }
 
@@ -435,15 +511,20 @@ function main() {
 
   var doApply = process.argv.includes("--yes") || process.argv.includes("--update");
   var doInstall = process.argv.includes("--yes");
+  var doResolve = process.argv.includes("--resolve");
 
   if (!doApply) {
     console.log("\n  dry run. use --yes to apply changes and install, or --update to just update package.json.");
+    console.log("  add --resolve to query registry for available versions (recommended for restricted registries).");
     process.exit(0);
   }
 
   // apply
   console.log("\n  applying changes to package.json ...");
-  var changed = applyChanges(analysis);
+  if (doResolve) {
+    console.log("  (resolving versions from registry)");
+  }
+  var changed = applyChanges(analysis, doResolve);
   console.log("  updated " + changed + " entries.");
 
   if (doInstall) {
