@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// fix-deps.js v1
+// fix-deps.js v2
 // fixes third-party dependencies after ng-upgrade-step.js has run
 // bumps companion packages to versions compatible with the detected angular version
 "use strict";
@@ -9,7 +9,7 @@ var path = require("path");
 var child_process = require("child_process");
 var spawnSync = child_process.spawnSync;
 
-var SCRIPT_VERSION = 1;
+var SCRIPT_VERSION = 2;
 
 // ============================================================================
 // compatibility map
