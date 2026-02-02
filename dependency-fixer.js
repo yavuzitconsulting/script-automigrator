@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// fix-deps.js v2
+// fix-deps.js v3
 // fixes third-party dependencies after ng-upgrade-step.js has run
 // bumps companion packages to versions compatible with the detected angular version
 "use strict";
@@ -9,7 +9,7 @@ var path = require("path");
 var child_process = require("child_process");
 var spawnSync = child_process.spawnSync;
 
-var SCRIPT_VERSION = 2;
+var SCRIPT_VERSION = 3;
 
 // ============================================================================
 // compatibility map
@@ -468,7 +468,36 @@ function applyChanges(analysis, useResolve, verbose) {
 // npm install
 // ============================================================================
 
+function cleanBeforeInstall() {
+  console.log("\n  cleaning stale files...");
+
+  // delete package-lock.json
+  if (fs.existsSync("package-lock.json")) {
+    fs.unlinkSync("package-lock.json");
+    console.log("    deleted package-lock.json");
+  }
+
+  // delete node_modules (cross-platform)
+  if (fs.existsSync("node_modules")) {
+    console.log("    deleting node_modules (this may take a moment)...");
+    var isWindows = process.platform === "win32";
+    var res;
+    if (isWindows) {
+      res = spawnSync("cmd", ["/c", "rmdir", "/s", "/q", "node_modules"], { stdio: "inherit", shell: true });
+    } else {
+      res = spawnSync("rm", ["-rf", "node_modules"], { stdio: "inherit", shell: true });
+    }
+    if (res.status === 0) {
+      console.log("    deleted node_modules");
+    } else {
+      console.log("    warning: could not delete node_modules, continuing anyway");
+    }
+  }
+}
+
 function runNpmInstall() {
+  cleanBeforeInstall();
+
   console.log("\n  running npm install --force --loglevel verbose ...\n");
   var res = spawnSync("npm", ["install", "--force", "--loglevel", "verbose"], {
     stdio: "inherit", shell: true, timeout: 600000, cwd: process.cwd()
