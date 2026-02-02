@@ -42,8 +42,6 @@ var COMPAT = {
     // latest is 22.x but we'll target ~22.0.1 (supports angular 19-21).
     // the script will apply the same version to ALL @progress/kendo-angular-* packages.
     "@progress/kendo-angular-*": "~22.0.1",
-    // schematics package may lag behind main kendo packages, resolve from registry
-    "@progress/kendo-angular-schematics": "latest",
     // kendo companion packages
     "@progress/kendo-data-query": "^1.7.0",
     "@progress/kendo-drawing": "^1.20.0",
@@ -85,6 +83,7 @@ var COMPAT = {
       "jasmine-spec-reporter", // old jasmine reporter
       "scss-bundle", // not needed with modern build
       "ng-packagr", // handled by @angular-devkit/build-angular now
+      "@progress/kendo-angular-schematics", // only needed for ng add, not runtime
     ],
 
     // overrides that reference old pinned deps -- clean these up
