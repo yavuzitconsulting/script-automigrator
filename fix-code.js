@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-// fix-code.js v1 - fixes code issues after angular upgrade
+// fix-code.js v2 - fixes code issues after angular upgrade
 "use strict";
 
 var fs = require("fs");
 var path = require("path");
 
-var VERSION = 1;
+var VERSION = 2;
 var fixes = [];
 
 function log(msg) { console.log("  " + msg); }
@@ -26,10 +26,20 @@ function fixBrowserslist() {
     "Firefox ESR",
   ];
 
-  // check .browserslistrc file
-  if (fs.existsSync(".browserslistrc")) {
+  var pkg = fs.existsSync("package.json") ? JSON.parse(fs.readFileSync("package.json", "utf8")) : null;
+  var hasPkgBrowserslist = pkg && pkg.browserslist;
+  var hasBrowserslistrc = fs.existsSync(".browserslistrc");
+
+  // angular doesnt allow both - remove .browserslistrc if package.json has browserslist
+  if (hasPkgBrowserslist && hasBrowserslistrc) {
+    fs.unlinkSync(".browserslistrc");
+    logFix("removed .browserslistrc (cant have both, keeping package.json)");
+    hasBrowserslistrc = false;
+  }
+
+  // update .browserslistrc if it has outdated entries
+  if (hasBrowserslistrc) {
     var content = fs.readFileSync(".browserslistrc", "utf8");
-    // check for outdated entries
     if (/kaios|op_mini|op_mob|android\s+\d|samsung|and_qq|and_uc|ie\s+\d/i.test(content)) {
       fs.writeFileSync(".browserslistrc", modern.join("\n") + "\n", "utf8");
       logFix("updated .browserslistrc with modern browsers");
@@ -39,25 +49,21 @@ function fixBrowserslist() {
     return;
   }
 
-  // check package.json browserslist
-  if (fs.existsSync("package.json")) {
-    var pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
-    if (pkg.browserslist) {
-      var str = JSON.stringify(pkg.browserslist);
-      if (/kaios|op_mini|op_mob|android|samsung|and_qq|and_uc|ie\s/i.test(str)) {
-        pkg.browserslist = modern;
-        fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n", "utf8");
-        logFix("updated browserslist in package.json");
-        return;
-      }
-      logSkip("browserslist in package.json looks ok");
+  // update package.json browserslist if it has outdated entries
+  if (hasPkgBrowserslist) {
+    var str = JSON.stringify(pkg.browserslist);
+    if (/kaios|op_mini|op_mob|android|samsung|and_qq|and_uc|ie\s/i.test(str)) {
+      pkg.browserslist = modern;
+      fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n", "utf8");
+      logFix("updated browserslist in package.json");
       return;
     }
+    logSkip("browserslist in package.json looks ok");
+    return;
   }
 
-  // no browserslist config found, create .browserslistrc
-  fs.writeFileSync(".browserslistrc", modern.join("\n") + "\n", "utf8");
-  logFix("created .browserslistrc with modern browsers");
+  // no config found - let angular use its defaults
+  logSkip("no browserslist config (angular uses defaults)");
 }
 
 // tsconfig: remove target/useDefineForClassFields that angular cli overrides anyway
