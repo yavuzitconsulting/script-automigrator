@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// fix-deps.js v7
+// fix-deps.js v8
 // fixes third-party dependencies after ng-upgrade-step.js has run
 // bumps companion packages to versions compatible with the detected angular version
 "use strict";
@@ -9,7 +9,7 @@ var path = require("path");
 var child_process = require("child_process");
 var spawnSync = child_process.spawnSync;
 
-var SCRIPT_VERSION = 7;
+var SCRIPT_VERSION = 8;
 
 // ============================================================================
 // compatibility map
@@ -440,21 +440,26 @@ function analyzeProject(angularMajor) {
     }
   });
 
-  // check pinned deps that were only there as override sources
+  // check pinned deps - remove from dependencies but keep as overrides for transitive deps
   var pinnedList = compat["__remove_pinned__"] || [];
+  var pinnedOverrides = []; // these will become overrides with resolved versions
   pinnedList.forEach(function (name) {
     if (allDeps[name]) {
       var section = deps[name] ? "dependencies" : "devDependencies";
       if (!removals.find(function (r) { return r.name === name; })) {
         removals.push({ name: name, section: section });
       }
+      // also track for override resolution
+      pinnedOverrides.push(name);
     }
   });
 
-  // collect overrides to remove
+  // collect overrides to remove (only those not in pinnedList)
   var overrideRemovals = [];
   var overrideList = compat["__remove_overrides__"] || [];
   overrideList.forEach(function (name) {
+    // don't remove if it's a pinned package - we'll resolve it instead
+    if (pinnedList.indexOf(name) !== -1) return;
     if (pkg.overrides && pkg.overrides[name]) {
       overrideRemovals.push(name);
     }
@@ -465,6 +470,7 @@ function analyzeProject(angularMajor) {
     kendoUpdates: kendoUpdates,
     removals: removals,
     overrideRemovals: overrideRemovals,
+    pinnedOverrides: pinnedOverrides, // new: packages that need override resolution
   };
 }
 
@@ -528,10 +534,26 @@ function applyChanges(analysis, useResolve, verbose) {
         changed++;
       }
     });
-    // remove overrides block entirely if empty
-    if (Object.keys(pkg.overrides).length === 0) {
-      delete pkg.overrides;
-    }
+  }
+
+  // add/update overrides for pinned packages (so transitive deps can resolve)
+  if (analysis.pinnedOverrides && analysis.pinnedOverrides.length) {
+    if (!pkg.overrides) pkg.overrides = {};
+    console.log("\n  resolving pinned package overrides for transitive deps...");
+    analysis.pinnedOverrides.forEach(function (name) {
+      // resolve latest available version from registry
+      var resolved = resolveVersion(name, "latest", verbose);
+      if (resolved && resolved !== "latest") {
+        pkg.overrides[name] = resolved;
+        console.log("    " + name + " -> " + resolved + " (override for transitive deps)");
+        changed++;
+      }
+    });
+  }
+
+  // remove overrides block entirely if empty
+  if (pkg.overrides && Object.keys(pkg.overrides).length === 0) {
+    delete pkg.overrides;
   }
 
   writePkgJson(pkg);
@@ -586,7 +608,8 @@ function runNpmInstall() {
 
 function printReport(analysis, angularMajor) {
   var overrides = analysis.overrideRemovals || [];
-  var totalChanges = analysis.updates.length + analysis.kendoUpdates.length + analysis.removals.length + overrides.length;
+  var pinnedOverrides = analysis.pinnedOverrides || [];
+  var totalChanges = analysis.updates.length + analysis.kendoUpdates.length + analysis.removals.length + overrides.length + pinnedOverrides.length;
 
   if (totalChanges === 0) {
     console.log("\n  all dependencies look compatible with angular v" + angularMajor + ". nothing to do.");
@@ -619,6 +642,13 @@ function printReport(analysis, angularMajor) {
   if (overrides.length) {
     console.log("\n  overrides to remove (no longer needed):");
     overrides.forEach(function (name) {
+      console.log("    " + name);
+    });
+  }
+
+  if (pinnedOverrides.length) {
+    console.log("\n  pinned packages to resolve as overrides (for transitive deps):");
+    pinnedOverrides.forEach(function (name) {
       console.log("    " + name);
     });
   }
