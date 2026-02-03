@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// fix-deps.js v16 - fixes deps after ng-upgrade-step.js
+// fix-deps.js v17 - fixes deps after ng-upgrade-step.js
 "use strict";
 
 var fs = require("fs");
@@ -532,10 +532,16 @@ function runNpmInstall() {
     var hasKendoLicensing = (pkg.dependencies && pkg.dependencies["@progress/kendo-licensing"]) ||
                            (pkg.devDependencies && pkg.devDependencies["@progress/kendo-licensing"]);
     if (hasKendoLicensing) {
-      console.log("\n  warning: npm install failed, likely kendo license issue");
-      console.log("  packages are installed, but license activation failed");
-      console.log("  fix your kendo license later, continuing with build test...\n");
-      return true; // continue anyway
+      console.log("\n  npm install failed, likely kendo license issue");
+      console.log("  retrying with --ignore-scripts to ensure packages are installed...\n");
+      var retry = spawnSync("npm", ["install", "--force", "--legacy-peer-deps", "--omit=optional", "--ignore-scripts"], {
+        stdio: "inherit", shell: true, timeout: 600000, cwd: process.cwd()
+      });
+      if (retry.status === 0) {
+        console.log("\n  packages installed (kendo license activation skipped)");
+        console.log("  fix your kendo license later\n");
+        return true;
+      }
     }
   }
   return res.status === 0;
