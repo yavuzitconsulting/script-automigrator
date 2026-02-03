@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// fix-deps.js v10
+// fix-deps.js v11
 // fixes third-party dependencies after ng-upgrade-step.js has run
 // bumps companion packages to versions compatible with the detected angular version
 "use strict";
@@ -9,7 +9,7 @@ var path = require("path");
 var child_process = require("child_process");
 var spawnSync = child_process.spawnSync;
 
-var SCRIPT_VERSION = 10;
+var SCRIPT_VERSION = 11;
 
 // ============================================================================
 // compatibility map
@@ -189,7 +189,7 @@ function fixAngularJson() {
   var angularJson = readAngularJson();
   if (!angularJson) {
     console.log("  no angular.json found, skipping angular.json fixes");
-    return;
+    return false;
   }
 
   var changed = false;
@@ -197,12 +197,26 @@ function fixAngularJson() {
 
   // deprecated options to remove from build targets
   var deprecatedOptions = [
-    "extractCss",        // removed in Angular 11+, CSS extracted by default
+    "extractCss",        // removed in Angular 11+
     "vendorChunk",       // removed in Angular 17+
     "commonChunk",       // removed in Angular 17+
     "buildOptimizer",    // removed in Angular 17+
     "es5BrowserSupport", // removed in Angular 10+
     "deployUrl",         // deprecated in Angular 13+
+    "aot",               // removed in application builder (always AOT)
+    "namedChunks",       // removed in application builder
+  ];
+
+  // options to rename for application builder
+  var renameOptions = {
+    "main": "browser",           // main -> browser in application builder
+    "browserTarget": "buildTarget", // browserTarget -> buildTarget
+  };
+
+  // deprecated builders to remove entirely
+  var deprecatedBuilders = [
+    "@angular-devkit/build-angular:tslint",    // TSLint removed
+    "@angular-devkit/build-angular:protractor", // Protractor removed
   ];
 
   // remove defaultProject (deprecated in Angular 15+)
@@ -212,46 +226,83 @@ function fixAngularJson() {
     changes.push("removed deprecated 'defaultProject'");
   }
 
-  // update builders from :browser to :application and remove deprecated options
   if (angularJson.projects) {
     Object.keys(angularJson.projects).forEach(function (projectName) {
       var project = angularJson.projects[projectName];
       if (project.architect) {
+        // collect targets to remove
+        var targetsToRemove = [];
+
         Object.keys(project.architect).forEach(function (targetName) {
           var target = project.architect[targetName];
-          if (target.builder) {
-            // update browser -> application
-            if (target.builder === "@angular-devkit/build-angular:browser") {
-              target.builder = "@angular-devkit/build-angular:application";
-              changed = true;
-              changes.push(projectName + "." + targetName + ": browser -> application builder");
-            }
+
+          // check for deprecated builders
+          if (target.builder && deprecatedBuilders.indexOf(target.builder) !== -1) {
+            targetsToRemove.push(targetName);
+            changes.push(projectName + "." + targetName + ": removed deprecated builder '" + target.builder + "'");
+            return;
           }
 
-          // remove deprecated options from all targets
+          // update browser -> application builder
+          if (target.builder === "@angular-devkit/build-angular:browser") {
+            target.builder = "@angular-devkit/build-angular:application";
+            changed = true;
+            changes.push(projectName + "." + targetName + ": browser -> application builder");
+          }
+
+          // fix options
           if (target.options) {
+            // remove deprecated options
             deprecatedOptions.forEach(function (opt) {
               if (target.options[opt] !== undefined) {
                 delete target.options[opt];
                 changed = true;
-                changes.push(projectName + "." + targetName + ": removed deprecated '" + opt + "'");
+                changes.push(projectName + "." + targetName + ": removed '" + opt + "'");
+              }
+            });
+
+            // rename options
+            Object.keys(renameOptions).forEach(function (oldName) {
+              if (target.options[oldName] !== undefined) {
+                target.options[renameOptions[oldName]] = target.options[oldName];
+                delete target.options[oldName];
+                changed = true;
+                changes.push(projectName + "." + targetName + ": renamed '" + oldName + "' -> '" + renameOptions[oldName] + "'");
               }
             });
           }
 
-          // also check configurations (production, development, etc.)
+          // fix configurations
           if (target.configurations) {
             Object.keys(target.configurations).forEach(function (configName) {
               var config = target.configurations[configName];
+
+              // remove deprecated options
               deprecatedOptions.forEach(function (opt) {
                 if (config[opt] !== undefined) {
                   delete config[opt];
                   changed = true;
-                  changes.push(projectName + "." + targetName + "." + configName + ": removed deprecated '" + opt + "'");
+                  changes.push(projectName + "." + targetName + "." + configName + ": removed '" + opt + "'");
+                }
+              });
+
+              // rename options
+              Object.keys(renameOptions).forEach(function (oldName) {
+                if (config[oldName] !== undefined) {
+                  config[renameOptions[oldName]] = config[oldName];
+                  delete config[oldName];
+                  changed = true;
+                  changes.push(projectName + "." + targetName + "." + configName + ": renamed '" + oldName + "' -> '" + renameOptions[oldName] + "'");
                 }
               });
             });
           }
+        });
+
+        // remove deprecated targets
+        targetsToRemove.forEach(function (targetName) {
+          delete project.architect[targetName];
+          changed = true;
         });
       }
     });
