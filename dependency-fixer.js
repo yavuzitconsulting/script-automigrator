@@ -588,7 +588,7 @@ function printReport(analysis, angularMajor) {
 }
 
 function main() {
-  console.log("fix-deps v15\n");
+  console.log("fix-deps v20\n");
 
   if (!fs.existsSync("package.json")) {
     console.error("no package.json found");
