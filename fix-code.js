@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-// fix-code.js v6 - fixes code issues after angular upgrade
+// fix-code.js v7 - fixes code issues after angular upgrade
 "use strict";
 
 var fs = require("fs");
 var path = require("path");
 
-var VERSION = 6;
+var VERSION = 7;
 var fixes = [];
 
 function log(msg) { console.log("  " + msg); }
@@ -89,9 +89,9 @@ function fixTsconfig() {
   });
 }
 
-// sass: convert @import to @use (basic cases)
+// sass: fix deprecated patterns (@import -> @use, remove tilde)
 function fixSassImports() {
-  log("checking sass files for deprecated @import...");
+  log("checking sass files...");
 
   var scssFiles = [];
 
@@ -112,9 +112,19 @@ function fixSassImports() {
   findScss("src");
 
   var totalFixed = 0;
+  var tildeFixed = 0;
   scssFiles.forEach(function(file) {
     var content = fs.readFileSync(file, "utf8");
     var original = content;
+
+    // remove tilde (~) from @use and @import (deprecated in dart sass / angular 15+)
+    // @use '~@progress/...' -> @use '@progress/...'
+    content = content.replace(/(@use\s+['"])~([^'"]+)/g, "$1$2");
+    content = content.replace(/(@import\s+['"])~([^'"]+)/g, "$1$2");
+
+    if (content !== original) {
+      tildeFixed++;
+    }
 
     // convert @import to @use for node_modules imports
     // @import 'node_modules/foo/bar'; -> @use 'foo/bar' as *;
@@ -137,14 +147,18 @@ function fixSassImports() {
     }
   });
 
-  if (totalFixed > 0) {
-    logFix("converted @import to @use in " + totalFixed + " scss file(s)");
-  } else {
-    logSkip("no @import statements to convert");
+  if (tildeFixed > 0) {
+    logFix("removed tilde (~) from imports in " + tildeFixed + " scss file(s)");
+  }
+  if (totalFixed > 0 && totalFixed !== tildeFixed) {
+    logFix("converted @import to @use in " + (totalFixed - tildeFixed) + " scss file(s)");
+  }
+  if (totalFixed === 0) {
+    logSkip("no scss fixes needed");
   }
 }
 
-// remove polyfills.ts if it only contains zone.js (angular 17+ handles this)
+// fix polyfills.ts: update zone.js import path, remove if only zone.js
 function fixPolyfills() {
   log("checking polyfills.ts...");
 
@@ -155,7 +169,18 @@ function fixPolyfills() {
   }
 
   var content = fs.readFileSync(file, "utf8");
-  // remove comments and whitespace
+  var original = content;
+
+  // fix old zone.js import paths (zone.js/dist/zone -> zone.js)
+  content = content.replace(/['"]zone\.js\/dist\/zone['"]/g, "'zone.js'");
+  content = content.replace(/['"]zone\.js\/dist\/zone-testing['"]/g, "'zone.js/testing'");
+
+  if (content !== original) {
+    fs.writeFileSync(file, content, "utf8");
+    logFix("updated zone.js import paths in polyfills.ts");
+  }
+
+  // remove comments and whitespace to check if file can be deleted
   var clean = content.replace(/\/\*[\s\S]*?\*\/|\/\/.*/g, "").trim();
 
   // if only zone.js import remains, file can be deleted
