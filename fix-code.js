@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-// fix-code.js v7 - fixes code issues after angular upgrade
+// fix-code.js v8 - fixes code issues after angular upgrade
 "use strict";
 
 var fs = require("fs");
 var path = require("path");
 
-var VERSION = 7;
+var VERSION = 8;
 var fixes = [];
 
 function log(msg) { console.log("  " + msg); }
@@ -68,8 +68,8 @@ function fixTsconfig() {
 
       if (ts.compilerOptions) {
         // angular cli sets these automatically, having them causes warnings
-        // only remove if they conflict with what angular wants (ES2022)
-        if (ts.compilerOptions.target && ts.compilerOptions.target.toLowerCase() !== "es2022") {
+        // remove regardless of value - angular cli wants full control
+        if (ts.compilerOptions.target !== undefined) {
           delete ts.compilerOptions.target;
           changed = true;
         }
@@ -174,6 +174,8 @@ function fixPolyfills() {
   // fix old zone.js import paths (zone.js/dist/zone -> zone.js)
   content = content.replace(/['"]zone\.js\/dist\/zone['"]/g, "'zone.js'");
   content = content.replace(/['"]zone\.js\/dist\/zone-testing['"]/g, "'zone.js/testing'");
+  // also handle zone.js/dist/zone-error, zone.js/dist/zone-patch-rxjs etc
+  content = content.replace(/['"]zone\.js\/dist\/([^'"]+)['"]/g, "'zone.js/$1'");
 
   if (content !== original) {
     fs.writeFileSync(file, content, "utf8");
