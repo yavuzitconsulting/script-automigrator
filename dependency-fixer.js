@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// fix-deps.js v14 - fixes deps after ng-upgrade-step.js
+// fix-deps.js v15 - fixes deps after ng-upgrade-step.js
 "use strict";
 
 var fs = require("fs");
@@ -521,8 +521,9 @@ function cleanBeforeInstall() {
 
 function runNpmInstall() {
   cleanBeforeInstall();
-  console.log("\n  npm install --force --legacy-peer-deps --omit=optional\n");
-  var res = spawnSync("npm", ["install", "--force", "--legacy-peer-deps", "--omit=optional"], {
+  // --ignore-scripts skips postinstall (like kendo license check)
+  console.log("\n  npm install --force --legacy-peer-deps --omit=optional --ignore-scripts\n");
+  var res = spawnSync("npm", ["install", "--force", "--legacy-peer-deps", "--omit=optional", "--ignore-scripts"], {
     stdio: "inherit", shell: true, timeout: 600000, cwd: process.cwd()
   });
   return res.status === 0;
@@ -563,7 +564,7 @@ function printReport(analysis, angularMajor) {
 }
 
 function main() {
-  console.log("fix-deps v14\n");
+  console.log("fix-deps v15\n");
 
   if (!fs.existsSync("package.json")) {
     console.error("no package.json found");
