@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-// fix-code.js v2 - fixes code issues after angular upgrade
+// fix-code.js v3 - fixes code issues after angular upgrade
 "use strict";
 
 var fs = require("fs");
 var path = require("path");
 
-var VERSION = 2;
+var VERSION = 3;
 var fixes = [];
 
 function log(msg) { console.log("  " + msg); }
@@ -27,11 +27,11 @@ function fixBrowserslist() {
   ];
 
   var pkg = fs.existsSync("package.json") ? JSON.parse(fs.readFileSync("package.json", "utf8")) : null;
-  var hasPkgBrowserslist = pkg && pkg.browserslist;
+  var hasPkgBrowserslist = pkg && ("browserslist" in pkg);
   var hasBrowserslistrc = fs.existsSync(".browserslistrc");
 
   // angular doesnt allow both - remove .browserslistrc if package.json has browserslist
-  if (hasPkgBrowserslist && hasBrowserslistrc) {
+  if (hasBrowserslistrc && hasPkgBrowserslist) {
     fs.unlinkSync(".browserslistrc");
     logFix("removed .browserslistrc (cant have both, keeping package.json)");
     hasBrowserslistrc = false;
