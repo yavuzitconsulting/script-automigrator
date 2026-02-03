@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// fix-deps.js v18 - fixes deps after ng-upgrade-step.js
+// fix-deps.js v19 - fixes deps after ng-upgrade-step.js
 "use strict";
 
 var fs = require("fs");
@@ -417,11 +417,16 @@ function analyzeProject(angularMajor) {
       "@progress/kendo-angular-icons",
       "@progress/kendo-angular-utils",
       "@progress/kendo-angular-navigation",
+      "@progress/kendo-angular-toolbar",
+      "@progress/kendo-angular-label",
+      "@progress/kendo-angular-conversational-ui",
       "@progress/kendo-svg-icons",
     ];
+    var kendoWildcard = compat["@progress/kendo-angular-*"];
     kendoPeers.forEach(function (name) {
-      if (!allDeps[name] && compat[name]) {
-        additions.push({ name: name, to: compat[name], section: "dependencies" });
+      if (!allDeps[name]) {
+        var ver = compat[name] || kendoWildcard;
+        if (ver) additions.push({ name: name, to: ver, section: "dependencies" });
       }
     });
   }
