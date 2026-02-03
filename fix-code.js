@@ -1,69 +1,55 @@
 #!/usr/bin/env node
-// fix-code.js v3 - fixes code issues after angular upgrade
+// fix-code.js v4 - fixes code issues after angular upgrade
 "use strict";
 
 var fs = require("fs");
 var path = require("path");
 
-var VERSION = 3;
+var VERSION = 4;
 var fixes = [];
 
 function log(msg) { console.log("  " + msg); }
 function logFix(msg) { fixes.push(msg); console.log("  [fix] " + msg); }
 function logSkip(msg) { console.log("  [skip] " + msg); }
 
-// browserslist: remove outdated browsers that angular 17+ doesnt support
+// browserslist: angular only allows ONE config source
+// possible locations: .browserslistrc, browserslist (file), package.json
 function fixBrowserslist() {
   log("checking browserslist...");
-
-  // modern browserslist for angular 17+
-  var modern = [
-    "last 2 Chrome versions",
-    "last 2 Firefox versions",
-    "last 2 Edge versions",
-    "last 2 Safari versions",
-    "last 2 iOS versions",
-    "Firefox ESR",
-  ];
 
   var pkg = fs.existsSync("package.json") ? JSON.parse(fs.readFileSync("package.json", "utf8")) : null;
   var hasPkgBrowserslist = pkg && ("browserslist" in pkg);
   var hasBrowserslistrc = fs.existsSync(".browserslistrc");
+  var hasBrowserslistFile = fs.existsSync("browserslist");
 
-  // angular doesnt allow both - remove .browserslistrc if package.json has browserslist
-  if (hasBrowserslistrc && hasPkgBrowserslist) {
-    fs.unlinkSync(".browserslistrc");
-    logFix("removed .browserslistrc (cant have both, keeping package.json)");
-    hasBrowserslistrc = false;
-  }
+  // count how many configs exist
+  var count = (hasPkgBrowserslist ? 1 : 0) + (hasBrowserslistrc ? 1 : 0) + (hasBrowserslistFile ? 1 : 0);
 
-  // update .browserslistrc if it has outdated entries
-  if (hasBrowserslistrc) {
-    var content = fs.readFileSync(".browserslistrc", "utf8");
-    if (/kaios|op_mini|op_mob|android\s+\d|samsung|and_qq|and_uc|ie\s+\d/i.test(content)) {
-      fs.writeFileSync(".browserslistrc", modern.join("\n") + "\n", "utf8");
-      logFix("updated .browserslistrc with modern browsers");
-      return;
+  if (count > 1) {
+    // angular doesnt allow multiple - keep package.json, remove files
+    if (hasBrowserslistrc) {
+      fs.unlinkSync(".browserslistrc");
+      logFix("removed .browserslistrc (multiple configs not allowed)");
     }
-    logSkip(".browserslistrc looks ok");
+    if (hasBrowserslistFile) {
+      fs.unlinkSync("browserslist");
+      logFix("removed browserslist file (multiple configs not allowed)");
+    }
+    if (!hasPkgBrowserslist) {
+      // if no package.json config, we deleted all files, nothing left
+      logSkip("removed all browserslist files, using angular defaults");
+    } else {
+      logSkip("keeping browserslist in package.json");
+    }
     return;
   }
 
-  // update package.json browserslist if it has outdated entries
-  if (hasPkgBrowserslist) {
-    var str = JSON.stringify(pkg.browserslist);
-    if (/kaios|op_mini|op_mob|android|samsung|and_qq|and_uc|ie\s/i.test(str)) {
-      pkg.browserslist = modern;
-      fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n", "utf8");
-      logFix("updated browserslist in package.json");
-      return;
-    }
-    logSkip("browserslist in package.json looks ok");
-    return;
+  // only one or zero configs - nothing to fix for duplicates
+  if (count === 0) {
+    logSkip("no browserslist config (angular uses defaults)");
+  } else {
+    logSkip("single browserslist config found");
   }
-
-  // no config found - let angular use its defaults
-  logSkip("no browserslist config (angular uses defaults)");
 }
 
 // tsconfig: remove target/useDefineForClassFields that angular cli overrides anyway
