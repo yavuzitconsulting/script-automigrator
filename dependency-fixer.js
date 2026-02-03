@@ -1,66 +1,31 @@
 #!/usr/bin/env node
-// fix-deps.js v12
-// fixes third-party dependencies after ng-upgrade-step.js has run
-// bumps companion packages to versions compatible with the detected angular version
+// fix-deps.js v13 - fixes deps after ng-upgrade-step.js
 "use strict";
 
 var fs = require("fs");
 var path = require("path");
-var child_process = require("child_process");
-var spawnSync = child_process.spawnSync;
-
-var SCRIPT_VERSION = 12;
-
-// ============================================================================
-// compatibility map
-// maps angular major version -> required companion package versions.
-// "latest" means we'll resolve via npm view at runtime.
-// packages not present in the project are skipped.
-// ============================================================================
+var spawnSync = require("child_process").spawnSync;
 
 var COMPAT = {
-  // angular 20
   20: {
-    // -- core companions --
     "rxjs": "~7.8.1",
     "zone.js": "~0.15.0",
     "tslib": "^2.3.0",
     "typescript": "~5.8.3",
-
-    // -- angular build packages --
-    // Angular 20 uses @angular/build by default (replaces @angular-devkit/build-angular)
     "@angular/build": "~20.0.1",
-    "@angular-devkit/build-angular": "~20.0.1", // still works as fallback
-    "@angular-devkit/build-ng-packagr": null, // removed in v17+, delete if present
+    "@angular-devkit/build-angular": "~20.0.1",
+    "@angular-devkit/build-ng-packagr": null,
     "@angular/language-service": "~20.0.1",
-
-    // -- angular cdk / material --
     "@angular/cdk": "~20.0.1",
     "@angular/material": "~20.0.1",
-
-    // -- kendo ui for angular --
-    // since v11 all @progress/kendo-angular-* packages share a single version.
-    // for angular 20, minimum kendo version is 19.1.0 per telerik's compat table.
-    // latest is 22.x but we'll target ~22.0.1 (supports angular 19-21).
-    // the script will apply the same version to ALL @progress/kendo-angular-* packages.
     "@progress/kendo-angular-*": "~22.0.1",
-    // kendo companion packages
     "@progress/kendo-data-query": "^1.7.0",
     "@progress/kendo-drawing": "^1.20.0",
     "@progress/kendo-theme-bootstrap": "^12.2.0",
     "@progress/kendo-theme-default": "^12.2.0",
     "@progress/kendo-theme-material": "^12.2.0",
-
-    // -- ng-bootstrap --
-    // ng-bootstrap 19.x supports angular 20
-    // ng-bootstrap 20.x requires angular 21
     "@ng-bootstrap/ng-bootstrap": "~19.0.1",
-
-    // -- bootstrap css --
-    // ng-bootstrap 17+ requires bootstrap 5.3+
     "bootstrap": "^5.3.3",
-
-    // -- testing --
     "@types/jasmine": "~5.1.4",
     "jasmine-core": "~5.4.0",
     "karma": "~6.4.4",
@@ -68,50 +33,22 @@ var COMPAT = {
     "karma-coverage": "~2.2.1",
     "karma-jasmine": "~5.1.0",
     "karma-jasmine-html-reporter": "~2.1.0",
-
-    // -- deprecated / removable --
-    // these should be removed entirely from package.json
     "__remove__": [
-      "core-js",
-      "classlist.js",
-      "web-animations-js",
-      "rxjs-compat",
-      "protractor",
-      "tslint",
-      "tsickle",
-      "codelyzer",
-      "karma-coverage-istanbul-reporter", // replaced by karma-coverage
-      "@types/jasminewd2", // protractor types, not needed
-      "jasmine-spec-reporter", // old jasmine reporter
-      "scss-bundle", // not needed with modern build
-      "ng-packagr", // handled by @angular-devkit/build-angular now
-      "@progress/kendo-angular-schematics", // only needed for ng add, not runtime
+      "core-js", "classlist.js", "web-animations-js", "rxjs-compat",
+      "protractor", "tslint", "tsickle", "codelyzer",
+      "karma-coverage-istanbul-reporter", "@types/jasminewd2",
+      "jasmine-spec-reporter", "scss-bundle", "ng-packagr",
+      "@progress/kendo-angular-schematics",
     ],
-
-    // overrides that reference old pinned deps -- clean these up
     "__remove_overrides__": [
-      "loader-utils",
-      "webpack",
-      "xmlhttprequest-ssl",
-      "tough-cookie",
-      "form-data",
-      "socket.io-parser",
-      "ip",
+      "loader-utils", "webpack", "xmlhttprequest-ssl", "tough-cookie",
+      "form-data", "socket.io-parser", "ip",
     ],
-
-    // these were pinned in deps as override sources -- remove if present
     "__remove_pinned__": [
-      "loader-utils",
-      "webpack",
-      "xmlhttprequest-ssl",
-      "tough-cookie",
-      "form-data",
-      "socket.io-parser",
-      "ip",
+      "loader-utils", "webpack", "xmlhttprequest-ssl", "tough-cookie",
+      "form-data", "socket.io-parser", "ip",
     ],
   },
-
-  // angular 19
   19: {
     "rxjs": "~7.8.1",
     "zone.js": "~0.15.0",
@@ -134,8 +71,6 @@ var COMPAT = {
       "protractor", "tslint", "tsickle", "codelyzer",
     ],
   },
-
-  // angular 18
   18: {
     "rxjs": "~7.8.1",
     "zone.js": "~0.14.10",
@@ -160,10 +95,6 @@ var COMPAT = {
   },
 };
 
-// ============================================================================
-// helpers
-// ============================================================================
-
 function readPkgJson() {
   return JSON.parse(fs.readFileSync("package.json", "utf8"));
 }
@@ -181,160 +112,118 @@ function writeAngularJson(obj) {
   fs.writeFileSync("angular.json", JSON.stringify(obj, null, 2) + "\n", "utf8");
 }
 
-// ============================================================================
-// angular.json fixes (for Angular 17+)
-// ============================================================================
-
+// fixes angular.json for ng17+ application builder
 function fixAngularJson() {
-  var angularJson = readAngularJson();
-  if (!angularJson) {
-    console.log("  no angular.json found, skipping angular.json fixes");
+  var aj = readAngularJson();
+  if (!aj) {
+    console.log("  no angular.json, skipping");
     return false;
   }
 
   var changed = false;
   var changes = [];
 
-  // deprecated options to remove from build targets
-  var deprecatedOptions = [
-    "extractCss",        // removed in Angular 11+
-    "vendorChunk",       // removed in Angular 17+
-    "commonChunk",       // removed in Angular 17+
-    "buildOptimizer",    // removed in Angular 17+
-    "es5BrowserSupport", // removed in Angular 10+
-    "deployUrl",         // deprecated in Angular 13+
-    "aot",               // removed in application builder (always AOT)
-    "namedChunks",       // removed in application builder
+  var deprecatedOpts = [
+    "extractCss", "vendorChunk", "commonChunk", "buildOptimizer",
+    "es5BrowserSupport", "deployUrl", "aot", "namedChunks",
   ];
 
-  // options to rename for application builder
-  var renameOptions = {
-    "main": "browser",           // main -> browser in application builder
-    "browserTarget": "buildTarget", // browserTarget -> buildTarget
-  };
-
-  // options that must be arrays in application builder
-  var arrayOptions = [
-    "polyfills",  // polyfills must be array in application builder
-  ];
-
-  // deprecated builders to remove entirely
+  var renameOpts = { "main": "browser", "browserTarget": "buildTarget" };
+  var arrayOpts = ["polyfills"];
   var deprecatedBuilders = [
-    "@angular-devkit/build-angular:tslint",    // TSLint removed
-    "@angular-devkit/build-angular:protractor", // Protractor removed
+    "@angular-devkit/build-angular:tslint",
+    "@angular-devkit/build-angular:protractor",
   ];
 
-  // remove defaultProject (deprecated in Angular 15+)
-  if (angularJson.defaultProject !== undefined) {
-    delete angularJson.defaultProject;
+  if (aj.defaultProject !== undefined) {
+    delete aj.defaultProject;
     changed = true;
-    changes.push("removed deprecated 'defaultProject'");
+    changes.push("removed defaultProject");
   }
 
-  if (angularJson.projects) {
-    Object.keys(angularJson.projects).forEach(function (projectName) {
-      var project = angularJson.projects[projectName];
-      if (project.architect) {
-        // collect targets to remove
-        var targetsToRemove = [];
+  if (aj.projects) {
+    Object.keys(aj.projects).forEach(function (proj) {
+      var p = aj.projects[proj];
+      if (!p.architect) return;
 
-        Object.keys(project.architect).forEach(function (targetName) {
-          var target = project.architect[targetName];
+      var toRemove = [];
+      Object.keys(p.architect).forEach(function (tgt) {
+        var t = p.architect[tgt];
 
-          // check for deprecated builders
-          if (target.builder && deprecatedBuilders.indexOf(target.builder) !== -1) {
-            targetsToRemove.push(targetName);
-            changes.push(projectName + "." + targetName + ": removed deprecated builder '" + target.builder + "'");
-            return;
-          }
+        if (t.builder && deprecatedBuilders.indexOf(t.builder) !== -1) {
+          toRemove.push(tgt);
+          changes.push(proj + "." + tgt + ": removed (deprecated)");
+          return;
+        }
 
-          // update browser -> application builder
-          if (target.builder === "@angular-devkit/build-angular:browser") {
-            target.builder = "@angular-devkit/build-angular:application";
-            changed = true;
-            changes.push(projectName + "." + targetName + ": browser -> application builder");
-          }
-
-          // fix options
-          if (target.options) {
-            // remove deprecated options
-            deprecatedOptions.forEach(function (opt) {
-              if (target.options[opt] !== undefined) {
-                delete target.options[opt];
-                changed = true;
-                changes.push(projectName + "." + targetName + ": removed '" + opt + "'");
-              }
-            });
-
-            // rename options
-            Object.keys(renameOptions).forEach(function (oldName) {
-              if (target.options[oldName] !== undefined) {
-                target.options[renameOptions[oldName]] = target.options[oldName];
-                delete target.options[oldName];
-                changed = true;
-                changes.push(projectName + "." + targetName + ": renamed '" + oldName + "' -> '" + renameOptions[oldName] + "'");
-              }
-            });
-
-            // convert string options to arrays
-            arrayOptions.forEach(function (opt) {
-              if (target.options[opt] !== undefined && typeof target.options[opt] === "string") {
-                target.options[opt] = [target.options[opt]];
-                changed = true;
-                changes.push(projectName + "." + targetName + ": converted '" + opt + "' to array");
-              }
-            });
-          }
-
-          // fix configurations
-          if (target.configurations) {
-            Object.keys(target.configurations).forEach(function (configName) {
-              var config = target.configurations[configName];
-
-              // remove deprecated options
-              deprecatedOptions.forEach(function (opt) {
-                if (config[opt] !== undefined) {
-                  delete config[opt];
-                  changed = true;
-                  changes.push(projectName + "." + targetName + "." + configName + ": removed '" + opt + "'");
-                }
-              });
-
-              // rename options
-              Object.keys(renameOptions).forEach(function (oldName) {
-                if (config[oldName] !== undefined) {
-                  config[renameOptions[oldName]] = config[oldName];
-                  delete config[oldName];
-                  changed = true;
-                  changes.push(projectName + "." + targetName + "." + configName + ": renamed '" + oldName + "' -> '" + renameOptions[oldName] + "'");
-                }
-              });
-
-              // convert string options to arrays
-              arrayOptions.forEach(function (opt) {
-                if (config[opt] !== undefined && typeof config[opt] === "string") {
-                  config[opt] = [config[opt]];
-                  changed = true;
-                  changes.push(projectName + "." + targetName + "." + configName + ": converted '" + opt + "' to array");
-                }
-              });
-            });
-          }
-        });
-
-        // remove deprecated targets
-        targetsToRemove.forEach(function (targetName) {
-          delete project.architect[targetName];
+        if (t.builder === "@angular-devkit/build-angular:browser") {
+          t.builder = "@angular-devkit/build-angular:application";
           changed = true;
-        });
-      }
+          changes.push(proj + "." + tgt + ": browser -> application");
+        }
+
+        if (t.options) {
+          deprecatedOpts.forEach(function (opt) {
+            if (t.options[opt] !== undefined) {
+              delete t.options[opt];
+              changed = true;
+              changes.push(proj + "." + tgt + ": removed " + opt);
+            }
+          });
+          Object.keys(renameOpts).forEach(function (old) {
+            if (t.options[old] !== undefined) {
+              t.options[renameOpts[old]] = t.options[old];
+              delete t.options[old];
+              changed = true;
+              changes.push(proj + "." + tgt + ": " + old + " -> " + renameOpts[old]);
+            }
+          });
+          arrayOpts.forEach(function (opt) {
+            if (t.options[opt] !== undefined && typeof t.options[opt] === "string") {
+              t.options[opt] = [t.options[opt]];
+              changed = true;
+              changes.push(proj + "." + tgt + ": " + opt + " to array");
+            }
+          });
+        }
+
+        if (t.configurations) {
+          Object.keys(t.configurations).forEach(function (cfg) {
+            var c = t.configurations[cfg];
+            deprecatedOpts.forEach(function (opt) {
+              if (c[opt] !== undefined) {
+                delete c[opt];
+                changed = true;
+              }
+            });
+            Object.keys(renameOpts).forEach(function (old) {
+              if (c[old] !== undefined) {
+                c[renameOpts[old]] = c[old];
+                delete c[old];
+                changed = true;
+              }
+            });
+            arrayOpts.forEach(function (opt) {
+              if (c[opt] !== undefined && typeof c[opt] === "string") {
+                c[opt] = [c[opt]];
+                changed = true;
+              }
+            });
+          });
+        }
+      });
+
+      toRemove.forEach(function (tgt) {
+        delete p.architect[tgt];
+        changed = true;
+      });
     });
   }
 
   if (changed) {
-    writeAngularJson(angularJson);
-    console.log("\n  angular.json fixes applied:");
-    changes.forEach(function (c) { console.log("    - " + c); });
+    writeAngularJson(aj);
+    console.log("\n  angular.json fixes:");
+    changes.forEach(function (c) { console.log("    " + c); });
   }
   return changed;
 }
@@ -343,20 +232,16 @@ function detectAngularVersion() {
   var pkg = readPkgJson();
   var deps = Object.assign({}, pkg.dependencies, pkg.devDependencies);
   var v = deps["@angular/core"];
-  if (!v) { console.error("no @angular/core found."); process.exit(1); }
+  if (!v) { console.error("no @angular/core found"); process.exit(1); }
   var m = v.replace(/^[\^~>=<\s]+/, "").match(/^(\d+)/);
-  if (!m) { console.error("cannot parse @angular/core version: " + v); process.exit(1); }
+  if (!m) { console.error("cant parse angular version: " + v); process.exit(1); }
   return +m[1];
 }
 
 function getNpmVersion() {
   try { return spawnSync("npm", ["--version"], { encoding: "utf8", shell: true }).stdout.trim(); }
-  catch (_) { return "unknown"; }
+  catch (_) { return "?"; }
 }
-
-// ============================================================================
-// semver utilities (from ng-upgrade-step.js)
-// ============================================================================
 
 function parseSemver(v) {
   var m = String(v).match(/^(\d+)\.(\d+)\.(\d+)/);
@@ -373,90 +258,66 @@ function findBestVersion(versions, wanted) {
   var clean = wanted.replace(/^[\^~>=<\s]+/, "");
   var target = parseSemver(clean);
   if (!target) return versions[versions.length - 1];
-  // filter to stable versions only (no alpha/beta/rc), then sort
   var stable = versions.filter(function (v) { return parseSemver(v); }).sort(compareSemver);
-  // exact match
   var exact = stable.find(function (v) { return v === clean; });
   if (exact) return exact;
-  // same major, >= wanted
   var sameMajGe = stable.filter(function (v) { var p = parseSemver(v); return p.major === target.major && compareSemver(v, clean) >= 0; });
   if (sameMajGe.length) return sameMajGe[0];
-  // same major, any version (take highest)
   var sameMaj = stable.filter(function (v) { return parseSemver(v).major === target.major; });
   if (sameMaj.length) return sameMaj[sameMaj.length - 1];
-  // any higher version
   var higher = stable.filter(function (v) { return compareSemver(v, clean) >= 0; });
   if (higher.length) return higher[0];
-  // fallback to latest
   return stable[stable.length - 1];
 }
-
-// ============================================================================
-// registry resolution
-// ============================================================================
 
 function getAllVersions(name, verbose) {
   if (verbose) console.log("    > npm view " + name + " versions");
   var r = spawnSync("npm", ["view", "--json", name, "versions"], { encoding: "utf8", timeout: 60000, shell: true });
-  if (r.status !== 0) {
-    if (verbose) console.log("    ! registry query failed for " + name);
-    return null;
-  }
+  if (r.status !== 0) return null;
   try {
     var p = JSON.parse(r.stdout.trim());
     var vers = typeof p === "string" ? [p] : Array.isArray(p) ? p : null;
     if (verbose && vers) console.log("    found " + vers.length + " versions");
     return vers;
-  } catch (_) {
-    if (verbose) console.log("    ! failed to parse registry response for " + name);
-    return null;
-  }
-}
-
-function getLatestVersion(name, verbose) {
-  if (verbose) console.log("    > npm view " + name + " version (latest)");
-  var r = spawnSync("npm", ["view", "--json", name, "version"], { encoding: "utf8", timeout: 60000, shell: true });
-  if (r.status !== 0) return null;
-  try {
-    return JSON.parse(r.stdout.trim());
   } catch (_) { return null; }
 }
 
+function getLatestVersion(name, verbose) {
+  if (verbose) console.log("    > npm view " + name + " version");
+  var r = spawnSync("npm", ["view", "--json", name, "version"], { encoding: "utf8", timeout: 60000, shell: true });
+  if (r.status !== 0) return null;
+  try { return JSON.parse(r.stdout.trim()); } catch (_) { return null; }
+}
+
 function resolveVersion(name, wanted, verbose) {
-  // handle "latest" keyword
   if (wanted === "latest") {
     var latest = getLatestVersion(name, verbose);
     if (latest) {
       console.log("    " + name + ": latest -> " + latest);
       return latest;
     }
-    console.log("    warning: could not resolve 'latest' for " + name);
+    console.log("    warning: cant resolve latest for " + name);
     return wanted;
   }
-
   var vers = getAllVersions(name, verbose);
   if (!vers || !vers.length) {
-    console.log("    warning: '" + name + "' not in registry, using wanted version: " + wanted);
+    console.log("    warning: " + name + " not in registry");
     return wanted;
   }
   var picked = findBestVersion(vers, wanted);
   var wantedClean = wanted.replace(/^[\^~>=<\s]+/, "");
   if (picked !== wantedClean) {
-    console.log("    " + name + ": " + wanted + " -> " + picked + " (best available)");
-  } else {
-    if (verbose) console.log("    " + name + ": " + wanted + " (exact match)");
+    console.log("    " + name + ": " + wanted + " -> " + picked);
+  } else if (verbose) {
+    console.log("    " + name + ": " + wanted + " (ok)");
   }
   return picked;
 }
 
-// ============================================================================
-// analysis
-// ============================================================================
-
 function analyzeProject(angularMajor) {
   var compat = COMPAT[angularMajor];
   if (!compat) {
-    console.log("  no compatibility data for angular v" + angularMajor + ".");
+    console.log("  no compat data for angular " + angularMajor);
     console.log("  supported: " + Object.keys(COMPAT).join(", "));
     process.exit(1);
   }
@@ -466,142 +327,90 @@ function analyzeProject(angularMajor) {
   var devDeps = pkg.devDependencies || {};
   var allDeps = Object.assign({}, deps, devDeps);
 
-  var updates = [];    // { name, from, to, section }
-  var removals = [];   // { name, section }
-  var kendoUpdates = []; // separate because we glob them
+  var updates = [];
+  var removals = [];
+  var kendoUpdates = [];
 
-  // collect explicit kendo package names (these take precedence over wildcard)
-  var explicitKendoPackages = Object.keys(compat).filter(function (name) {
-    return name.indexOf("@progress/kendo-angular-") === 0 && name !== "@progress/kendo-angular-*";
+  var explicitKendo = Object.keys(compat).filter(function (n) {
+    return n.indexOf("@progress/kendo-angular-") === 0 && n !== "@progress/kendo-angular-*";
   });
+  var toRemove = (compat["__remove__"] || []).concat(compat["__remove_pinned__"] || [], compat["__remove_overrides__"] || []);
 
-  // collect packages marked for removal (should not be updated by wildcard)
-  var packagesToRemove = (compat["__remove__"] || []).concat(
-    compat["__remove_pinned__"] || [],
-    compat["__remove_overrides__"] || []
-  );
-
-  // check each package in our compat map
   Object.keys(compat).forEach(function (name) {
-    if (name === "__remove__") return;
+    if (name === "__remove__" || name === "__remove_overrides__" || name === "__remove_pinned__") return;
+    var target = compat[name];
 
-    var targetVersion = compat[name];
-
-    // handle kendo wildcard
     if (name === "@progress/kendo-angular-*") {
-      // find all @progress/kendo-angular-* packages in the project
-      Object.keys(allDeps).forEach(function (depName) {
-        if (depName.indexOf("@progress/kendo-angular-") === 0) {
-          // skip packages that have explicit entries (they'll be handled separately)
-          if (explicitKendoPackages.indexOf(depName) !== -1) return;
-          // skip packages marked for removal
-          if (packagesToRemove.indexOf(depName) !== -1) return;
-
-          var current = allDeps[depName];
-          var section = deps[depName] ? "dependencies" : "devDependencies";
-          var currentClean = current.replace(/^[\^~>=<\s]+/, "");
-          var targetClean = targetVersion.replace(/^[\^~>=<\s]+/, "");
-          if (currentClean !== targetClean) {
-            kendoUpdates.push({ name: depName, from: current, to: targetVersion, section: section });
+      Object.keys(allDeps).forEach(function (dep) {
+        if (dep.indexOf("@progress/kendo-angular-") === 0) {
+          if (explicitKendo.indexOf(dep) !== -1) return;
+          if (toRemove.indexOf(dep) !== -1) return;
+          var curr = allDeps[dep];
+          var sec = deps[dep] ? "dependencies" : "devDependencies";
+          if (curr.replace(/^[\^~>=<\s]+/, "") !== target.replace(/^[\^~>=<\s]+/, "")) {
+            kendoUpdates.push({ name: dep, from: curr, to: target, section: sec });
           }
         }
       });
       return;
     }
 
-    // null means "remove if present"
-    if (targetVersion === null) {
+    if (target === null) {
       if (allDeps[name]) {
-        var section = deps[name] ? "dependencies" : "devDependencies";
-        removals.push({ name: name, section: section });
+        removals.push({ name: name, section: deps[name] ? "dependencies" : "devDependencies" });
       }
       return;
     }
 
-    // only update if the package exists in the project
     if (allDeps[name]) {
-      var current = allDeps[name];
-      var section = deps[name] ? "dependencies" : "devDependencies";
-      // check if version is already compatible (rough check)
-      var currentClean = current.replace(/^[\^~>=<\s]+/, "");
-      var targetClean = targetVersion.replace(/^[\^~>=<\s]+/, "");
-      if (currentClean !== targetClean) {
-        updates.push({ name: name, from: current, to: targetVersion, section: section });
+      var curr = allDeps[name];
+      var sec = deps[name] ? "dependencies" : "devDependencies";
+      if (curr.replace(/^[\^~>=<\s]+/, "") !== target.replace(/^[\^~>=<\s]+/, "")) {
+        updates.push({ name: name, from: curr, to: target, section: sec });
       }
     }
   });
 
-  // check removals list
-  var removeList = compat["__remove__"] || [];
-  removeList.forEach(function (name) {
-    if (allDeps[name]) {
-      var section = deps[name] ? "dependencies" : "devDependencies";
-      // avoid duplicates
-      if (!removals.find(function (r) { return r.name === name; })) {
-        removals.push({ name: name, section: section });
-      }
+  (compat["__remove__"] || []).forEach(function (name) {
+    if (allDeps[name] && !removals.find(function (r) { return r.name === name; })) {
+      removals.push({ name: name, section: deps[name] ? "dependencies" : "devDependencies" });
     }
   });
 
-  // check pinned deps - remove from dependencies but keep as overrides for transitive deps
   var pinnedList = compat["__remove_pinned__"] || [];
-  var pinnedOverrides = []; // these will become overrides with resolved versions
+  var pinnedOverrides = [];
   pinnedList.forEach(function (name) {
     if (allDeps[name]) {
-      var section = deps[name] ? "dependencies" : "devDependencies";
       if (!removals.find(function (r) { return r.name === name; })) {
-        removals.push({ name: name, section: section });
+        removals.push({ name: name, section: deps[name] ? "dependencies" : "devDependencies" });
       }
-      // also track for override resolution
       pinnedOverrides.push(name);
     }
   });
 
-  // collect overrides to remove (only those not in pinnedList)
   var overrideRemovals = [];
-  var overrideList = compat["__remove_overrides__"] || [];
-  overrideList.forEach(function (name) {
-    // don't remove if it's a pinned package - we'll resolve it instead
+  (compat["__remove_overrides__"] || []).forEach(function (name) {
     if (pinnedList.indexOf(name) !== -1) return;
-    if (pkg.overrides && pkg.overrides[name]) {
-      overrideRemovals.push(name);
-    }
+    if (pkg.overrides && pkg.overrides[name]) overrideRemovals.push(name);
   });
 
-  return {
-    updates: updates,
-    kendoUpdates: kendoUpdates,
-    removals: removals,
-    overrideRemovals: overrideRemovals,
-    pinnedOverrides: pinnedOverrides, // new: packages that need override resolution
-  };
+  return { updates: updates, kendoUpdates: kendoUpdates, removals: removals, overrideRemovals: overrideRemovals, pinnedOverrides: pinnedOverrides };
 }
-
-// ============================================================================
-// apply changes
-// ============================================================================
 
 function applyChanges(analysis, useResolve, verbose) {
   var pkg = readPkgJson();
   var changed = 0;
 
-  // helper to get the final version (resolve from registry if enabled)
   function getVersion(name, wanted) {
     if (!useResolve) return wanted;
     var resolved = resolveVersion(name, wanted, verbose);
-    // handle "latest" - don't add prefix
     if (wanted === "latest") return resolved;
-    // preserve the prefix (^ or ~) from wanted, but use resolved version number
     var prefix = wanted.match(/^[\^~]/);
     return (prefix ? prefix[0] : "") + resolved;
   }
 
-  // apply updates
-  if (useResolve) {
-    console.log("\n  resolving package versions from registry...");
-  } else {
-    console.log("\n  applying package versions...");
-  }
+  console.log(useResolve ? "\n  resolving versions..." : "\n  applying versions...");
+
   analysis.updates.forEach(function (u) {
     if (pkg[u.section] && pkg[u.section][u.name]) {
       pkg[u.section][u.name] = getVersion(u.name, u.to);
@@ -609,7 +418,6 @@ function applyChanges(analysis, useResolve, verbose) {
     }
   });
 
-  // apply kendo updates
   analysis.kendoUpdates.forEach(function (u) {
     if (pkg[u.section] && pkg[u.section][u.name]) {
       pkg[u.section][u.name] = getVersion(u.name, u.to);
@@ -617,231 +425,156 @@ function applyChanges(analysis, useResolve, verbose) {
     }
   });
 
-  // apply removals
   analysis.removals.forEach(function (r) {
-    if (pkg.dependencies && pkg.dependencies[r.name]) {
-      delete pkg.dependencies[r.name];
-      changed++;
-    }
-    if (pkg.devDependencies && pkg.devDependencies[r.name]) {
-      delete pkg.devDependencies[r.name];
-      changed++;
-    }
+    if (pkg.dependencies && pkg.dependencies[r.name]) { delete pkg.dependencies[r.name]; changed++; }
+    if (pkg.devDependencies && pkg.devDependencies[r.name]) { delete pkg.devDependencies[r.name]; changed++; }
   });
 
-  // remove overrides
   if (analysis.overrideRemovals && analysis.overrideRemovals.length && pkg.overrides) {
     analysis.overrideRemovals.forEach(function (name) {
-      if (pkg.overrides[name]) {
-        delete pkg.overrides[name];
-        changed++;
-      }
+      if (pkg.overrides[name]) { delete pkg.overrides[name]; changed++; }
     });
   }
 
-  // add/update overrides for pinned packages (so transitive deps can resolve)
   if (analysis.pinnedOverrides && analysis.pinnedOverrides.length) {
     if (!pkg.overrides) pkg.overrides = {};
-    console.log("\n  resolving pinned package overrides for transitive deps...");
+    console.log("\n  resolving overrides for transitive deps...");
     analysis.pinnedOverrides.forEach(function (name) {
-      // resolve latest available version from registry
       var resolved = resolveVersion(name, "latest", verbose);
       if (resolved && resolved !== "latest") {
         pkg.overrides[name] = resolved;
-        console.log("    " + name + " -> " + resolved + " (override for transitive deps)");
+        console.log("    " + name + " -> " + resolved);
         changed++;
       }
     });
   }
 
-  // remove overrides block entirely if empty
-  if (pkg.overrides && Object.keys(pkg.overrides).length === 0) {
-    delete pkg.overrides;
-  }
+  if (pkg.overrides && Object.keys(pkg.overrides).length === 0) delete pkg.overrides;
 
   writePkgJson(pkg);
   return changed;
 }
 
-// ============================================================================
-// npm install
-// ============================================================================
-
 function cleanBeforeInstall() {
-  console.log("\n  cleaning stale files...");
-
-  // delete package-lock.json
+  console.log("\n  cleaning...");
   if (fs.existsSync("package-lock.json")) {
     fs.unlinkSync("package-lock.json");
     console.log("    deleted package-lock.json");
   }
-
-  // delete node_modules (cross-platform)
   if (fs.existsSync("node_modules")) {
-    console.log("    deleting node_modules (this may take a moment)...");
-    var isWindows = process.platform === "win32";
-    var res;
-    if (isWindows) {
-      res = spawnSync("cmd", ["/c", "rmdir", "/s", "/q", "node_modules"], { stdio: "inherit", shell: true });
-    } else {
-      res = spawnSync("rm", ["-rf", "node_modules"], { stdio: "inherit", shell: true });
-    }
-    if (res.status === 0) {
-      console.log("    deleted node_modules");
-    } else {
-      console.log("    warning: could not delete node_modules, continuing anyway");
-    }
+    console.log("    deleting node_modules...");
+    var isWin = process.platform === "win32";
+    var res = isWin
+      ? spawnSync("cmd", ["/c", "rmdir", "/s", "/q", "node_modules"], { stdio: "inherit", shell: true })
+      : spawnSync("rm", ["-rf", "node_modules"], { stdio: "inherit", shell: true });
+    if (res.status === 0) console.log("    done");
   }
 }
 
 function runNpmInstall() {
   cleanBeforeInstall();
-
-  // --omit=optional skips optional deps like kendo-angular-schematics that may not be in registry
-  console.log("\n  running npm install --force --legacy-peer-deps --omit=optional ...\n");
+  console.log("\n  npm install --force --legacy-peer-deps --omit=optional\n");
   var res = spawnSync("npm", ["install", "--force", "--legacy-peer-deps", "--omit=optional"], {
     stdio: "inherit", shell: true, timeout: 600000, cwd: process.cwd()
   });
   return res.status === 0;
 }
 
-// ============================================================================
-// report
-// ============================================================================
-
 function printReport(analysis, angularMajor) {
-  var overrides = analysis.overrideRemovals || [];
-  var pinnedOverrides = analysis.pinnedOverrides || [];
-  var totalChanges = analysis.updates.length + analysis.kendoUpdates.length + analysis.removals.length + overrides.length + pinnedOverrides.length;
+  var total = analysis.updates.length + analysis.kendoUpdates.length + analysis.removals.length +
+    (analysis.overrideRemovals || []).length + (analysis.pinnedOverrides || []).length;
 
-  if (totalChanges === 0) {
-    console.log("\n  all dependencies look compatible with angular v" + angularMajor + ". nothing to do.");
+  if (total === 0) {
+    console.log("\n  deps look ok for angular " + angularMajor);
     return;
   }
 
-  console.log("\n  found " + totalChanges + " dependency issue(s) for angular v" + angularMajor + ":\n");
+  console.log("\n  found " + total + " issue(s):\n");
 
   if (analysis.updates.length) {
     console.log("  updates:");
-    analysis.updates.forEach(function (u) {
-      console.log("    " + u.name + ": " + u.from + " -> " + u.to + " (" + u.section + ")");
-    });
+    analysis.updates.forEach(function (u) { console.log("    " + u.name + ": " + u.from + " -> " + u.to); });
   }
-
   if (analysis.kendoUpdates.length) {
-    console.log("\n  kendo updates (" + analysis.kendoUpdates.length + " packages -> " + analysis.kendoUpdates[0].to + "):");
-    analysis.kendoUpdates.forEach(function (u) {
-      console.log("    " + u.name + ": " + u.from + " -> " + u.to);
-    });
+    console.log("\n  kendo (" + analysis.kendoUpdates.length + " packages):");
+    analysis.kendoUpdates.forEach(function (u) { console.log("    " + u.name + ": " + u.from + " -> " + u.to); });
   }
-
   if (analysis.removals.length) {
-    console.log("\n  removals (deprecated/obsolete):");
-    analysis.removals.forEach(function (r) {
-      console.log("    " + r.name + " (" + r.section + ")");
-    });
+    console.log("\n  removals:");
+    analysis.removals.forEach(function (r) { console.log("    " + r.name); });
   }
-
-  if (overrides.length) {
-    console.log("\n  overrides to remove (no longer needed):");
-    overrides.forEach(function (name) {
-      console.log("    " + name);
-    });
-  }
-
-  if (pinnedOverrides.length) {
-    console.log("\n  pinned packages to resolve as overrides (for transitive deps):");
-    pinnedOverrides.forEach(function (name) {
-      console.log("    " + name);
-    });
+  if ((analysis.pinnedOverrides || []).length) {
+    console.log("\n  pinned -> overrides:");
+    analysis.pinnedOverrides.forEach(function (n) { console.log("    " + n); });
   }
 }
 
-// ============================================================================
-// main
-// ============================================================================
-
 function main() {
-  console.log("fix-deps.js v" + SCRIPT_VERSION + "\n");
+  console.log("fix-deps v13\n");
 
   if (!fs.existsSync("package.json")) {
-    console.error("error: no package.json found. run from your angular project root.");
+    console.error("no package.json found");
     process.exit(1);
   }
 
   var angularMajor = detectAngularVersion();
-  console.log("  detected angular v" + angularMajor);
-  console.log("  node " + process.version + ", npm " + getNpmVersion());
+  console.log("  angular " + angularMajor + ", node " + process.version + ", npm " + getNpmVersion());
 
   if (process.argv.includes("--help")) {
-    console.log("\nfix-deps.js -- fix third-party deps after angular upgrade\n");
-    console.log("  node fix-deps.js             dry run (show what would change)");
-    console.log("  node fix-deps.js --yes        apply changes + npm install (recommended)");
-    console.log("  node fix-deps.js --update     apply changes only (no npm install)");
-    console.log("  node fix-deps.js --no-resolve skip registry resolution (use hardcoded versions)");
-    console.log("  node fix-deps.js --quiet      suppress verbose output");
-    console.log("  node fix-deps.js --help       this message");
-    console.log("\nnotes:");
-    console.log("  - registry resolution is ON by default (queries npm for available versions)");
-    console.log("  - verbose output is ON by default (shows registry queries)");
+    console.log("\nusage:");
+    console.log("  node fix-deps.js           dry run");
+    console.log("  node fix-deps.js --yes     apply + install");
+    console.log("  node fix-deps.js --update  apply only");
+    console.log("  --no-resolve               skip registry check");
+    console.log("  --quiet                    less output");
     process.exit(0);
   }
 
   var analysis = analyzeProject(angularMajor);
   printReport(analysis, angularMajor);
 
-  var totalChanges = analysis.updates.length + analysis.kendoUpdates.length + analysis.removals.length + (analysis.overrideRemovals || []).length + (analysis.pinnedOverrides || []).length;
+  var total = analysis.updates.length + analysis.kendoUpdates.length + analysis.removals.length +
+    (analysis.overrideRemovals || []).length + (analysis.pinnedOverrides || []).length;
 
   var doApply = process.argv.includes("--yes") || process.argv.includes("--update");
   var doInstall = process.argv.includes("--yes");
-  // --resolve and --verbose are ON by default, use --no-resolve / --quiet to disable
   var doResolve = !process.argv.includes("--no-resolve");
   var doVerbose = !process.argv.includes("--quiet");
 
-  // always check angular.json, even if no package.json changes
-  var angularJsonChanged = false;
-  if (doApply) {
-    angularJsonChanged = fixAngularJson();
-  }
+  var ajChanged = false;
+  if (doApply) ajChanged = fixAngularJson();
 
-  if (totalChanges === 0 && !angularJsonChanged) {
-    console.log("\n  all dependencies look compatible with angular v" + angularMajor + ". nothing to do.");
+  if (total === 0 && !ajChanged) {
+    console.log("\n  nothing to do");
     process.exit(0);
   }
 
   if (!doApply) {
-    console.log("\n  dry run. use --yes to apply changes and install, or --update to just update package.json.");
+    console.log("\n  dry run. use --yes to apply");
     process.exit(0);
   }
 
-  // apply package.json changes
-  if (totalChanges > 0) {
-    console.log("\n  applying changes to package.json ...");
+  if (total > 0) {
+    console.log("\n  updating package.json...");
     var changed = applyChanges(analysis, doResolve, doVerbose);
-    console.log("  updated " + changed + " entries.");
+    console.log("  updated " + changed + " entries");
   }
 
   if (doInstall) {
     var ok = runNpmInstall();
     if (!ok) {
-      console.error("\n  npm install failed. check output above and fix manually.");
+      console.error("\n  npm install failed");
       process.exit(1);
     }
-    console.log("\n  done. try 'ng build' to see if there are remaining issues.");
+    console.log("\n  done. run ng build to check");
   } else {
-    console.log("\n  package.json updated. run 'npm install --force --legacy-peer-deps --omit=optional' when ready.");
+    console.log("\n  package.json updated. run npm install when ready");
   }
 
-  // post-install notes
   console.log("\n  notes:");
-  console.log("  - kendo packages were bumped to latest. there will likely be breaking api changes.");
-  console.log("  - check kendo changelog: https://www.telerik.com/kendo-angular-ui/components/changelogs/kendo-angular-ui");
-  console.log("  - if using @ng-bootstrap, bootstrap css must be v5.3+.");
-  console.log("  - removed packages (core-js, protractor, tslint, etc.) may need replacement:");
-  console.log("      tslint -> eslint (@angular-eslint/schematics)");
-  console.log("      protractor -> cypress or playwright");
-  console.log("      core-js -> not needed since angular 12+");
-  console.log("  - run 'ng build' and fix errors iteratively.");
+  console.log("  - kendo may have breaking changes, check changelog");
+  console.log("  - ng-bootstrap needs bootstrap 5.3+");
+  console.log("  - tslint -> eslint, protractor -> cypress/playwright");
 }
 
 main();
