@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// fix-deps.js v13 - fixes deps after ng-upgrade-step.js
+// fix-deps.js v14 - fixes deps after ng-upgrade-step.js
 "use strict";
 
 var fs = require("fs");
@@ -25,7 +25,14 @@ var COMPAT = {
     "@progress/kendo-theme-default": "^12.2.0",
     "@progress/kendo-theme-material": "^12.2.0",
     "@ng-bootstrap/ng-bootstrap": "~19.0.1",
+    "@popperjs/core": "^2.11.8",
     "bootstrap": "^5.3.3",
+    // kendo peer deps (required since kendo v12+)
+    "@progress/kendo-licensing": "^1.4.0",
+    "@progress/kendo-angular-icons": "~22.0.1",
+    "@progress/kendo-angular-utils": "~22.0.1",
+    "@progress/kendo-angular-navigation": "~22.0.1",
+    "@progress/kendo-svg-icons": "^4.0.0",
     "@types/jasmine": "~5.1.4",
     "jasmine-core": "~5.4.0",
     "karma": "~6.4.4",
@@ -394,7 +401,37 @@ function analyzeProject(angularMajor) {
     if (pkg.overrides && pkg.overrides[name]) overrideRemovals.push(name);
   });
 
-  return { updates: updates, kendoUpdates: kendoUpdates, removals: removals, overrideRemovals: overrideRemovals, pinnedOverrides: pinnedOverrides };
+  // check if project uses kendo
+  var hasKendo = Object.keys(allDeps).some(function (d) {
+    return d.indexOf("@progress/kendo-angular-") === 0;
+  });
+
+  // check if project uses ng-bootstrap
+  var hasNgBootstrap = !!allDeps["@ng-bootstrap/ng-bootstrap"];
+
+  // add missing peer deps
+  var additions = [];
+  if (hasKendo) {
+    var kendoPeers = [
+      "@progress/kendo-licensing",
+      "@progress/kendo-angular-icons",
+      "@progress/kendo-angular-utils",
+      "@progress/kendo-angular-navigation",
+      "@progress/kendo-svg-icons",
+    ];
+    kendoPeers.forEach(function (name) {
+      if (!allDeps[name] && compat[name]) {
+        additions.push({ name: name, to: compat[name], section: "dependencies" });
+      }
+    });
+  }
+  if (hasNgBootstrap) {
+    if (!allDeps["@popperjs/core"] && compat["@popperjs/core"]) {
+      additions.push({ name: "@popperjs/core", to: compat["@popperjs/core"], section: "dependencies" });
+    }
+  }
+
+  return { updates: updates, kendoUpdates: kendoUpdates, removals: removals, overrideRemovals: overrideRemovals, pinnedOverrides: pinnedOverrides, additions: additions };
 }
 
 function applyChanges(analysis, useResolve, verbose) {
@@ -424,6 +461,17 @@ function applyChanges(analysis, useResolve, verbose) {
       changed++;
     }
   });
+
+  // add missing peer deps
+  if (analysis.additions && analysis.additions.length) {
+    console.log("\n  adding missing peer deps...");
+    analysis.additions.forEach(function (a) {
+      if (!pkg[a.section]) pkg[a.section] = {};
+      pkg[a.section][a.name] = getVersion(a.name, a.to);
+      console.log("    + " + a.name + ": " + a.to);
+      changed++;
+    });
+  }
 
   analysis.removals.forEach(function (r) {
     if (pkg.dependencies && pkg.dependencies[r.name]) { delete pkg.dependencies[r.name]; changed++; }
@@ -482,7 +530,8 @@ function runNpmInstall() {
 
 function printReport(analysis, angularMajor) {
   var total = analysis.updates.length + analysis.kendoUpdates.length + analysis.removals.length +
-    (analysis.overrideRemovals || []).length + (analysis.pinnedOverrides || []).length;
+    (analysis.overrideRemovals || []).length + (analysis.pinnedOverrides || []).length +
+    (analysis.additions || []).length;
 
   if (total === 0) {
     console.log("\n  deps look ok for angular " + angularMajor);
@@ -499,6 +548,10 @@ function printReport(analysis, angularMajor) {
     console.log("\n  kendo (" + analysis.kendoUpdates.length + " packages):");
     analysis.kendoUpdates.forEach(function (u) { console.log("    " + u.name + ": " + u.from + " -> " + u.to); });
   }
+  if ((analysis.additions || []).length) {
+    console.log("\n  missing peer deps to add:");
+    analysis.additions.forEach(function (a) { console.log("    " + a.name + ": " + a.to); });
+  }
   if (analysis.removals.length) {
     console.log("\n  removals:");
     analysis.removals.forEach(function (r) { console.log("    " + r.name); });
@@ -510,7 +563,7 @@ function printReport(analysis, angularMajor) {
 }
 
 function main() {
-  console.log("fix-deps v13\n");
+  console.log("fix-deps v14\n");
 
   if (!fs.existsSync("package.json")) {
     console.error("no package.json found");
@@ -534,7 +587,8 @@ function main() {
   printReport(analysis, angularMajor);
 
   var total = analysis.updates.length + analysis.kendoUpdates.length + analysis.removals.length +
-    (analysis.overrideRemovals || []).length + (analysis.pinnedOverrides || []).length;
+    (analysis.overrideRemovals || []).length + (analysis.pinnedOverrides || []).length +
+    (analysis.additions || []).length;
 
   var doApply = process.argv.includes("--yes") || process.argv.includes("--update");
   var doInstall = process.argv.includes("--yes");
