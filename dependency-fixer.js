@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// fix-deps.js v11
+// fix-deps.js v12
 // fixes third-party dependencies after ng-upgrade-step.js has run
 // bumps companion packages to versions compatible with the detected angular version
 "use strict";
@@ -9,7 +9,7 @@ var path = require("path");
 var child_process = require("child_process");
 var spawnSync = child_process.spawnSync;
 
-var SCRIPT_VERSION = 11;
+var SCRIPT_VERSION = 12;
 
 // ============================================================================
 // compatibility map
@@ -213,6 +213,11 @@ function fixAngularJson() {
     "browserTarget": "buildTarget", // browserTarget -> buildTarget
   };
 
+  // options that must be arrays in application builder
+  var arrayOptions = [
+    "polyfills",  // polyfills must be array in application builder
+  ];
+
   // deprecated builders to remove entirely
   var deprecatedBuilders = [
     "@angular-devkit/build-angular:tslint",    // TSLint removed
@@ -270,6 +275,15 @@ function fixAngularJson() {
                 changes.push(projectName + "." + targetName + ": renamed '" + oldName + "' -> '" + renameOptions[oldName] + "'");
               }
             });
+
+            // convert string options to arrays
+            arrayOptions.forEach(function (opt) {
+              if (target.options[opt] !== undefined && typeof target.options[opt] === "string") {
+                target.options[opt] = [target.options[opt]];
+                changed = true;
+                changes.push(projectName + "." + targetName + ": converted '" + opt + "' to array");
+              }
+            });
           }
 
           // fix configurations
@@ -293,6 +307,15 @@ function fixAngularJson() {
                   delete config[oldName];
                   changed = true;
                   changes.push(projectName + "." + targetName + "." + configName + ": renamed '" + oldName + "' -> '" + renameOptions[oldName] + "'");
+                }
+              });
+
+              // convert string options to arrays
+              arrayOptions.forEach(function (opt) {
+                if (config[opt] !== undefined && typeof config[opt] === "string") {
+                  config[opt] = [config[opt]];
+                  changed = true;
+                  changes.push(projectName + "." + targetName + "." + configName + ": converted '" + opt + "' to array");
                 }
               });
             });
