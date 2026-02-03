@@ -1,13 +1,12 @@
 #!/usr/bin/env node
-// fix-code.js v5 - fixes code issues after angular upgrade
+// fix-code.js v6 - fixes code issues after angular upgrade
 "use strict";
 
 var fs = require("fs");
 var path = require("path");
 
-var VERSION = 5;
+var VERSION = 6;
 var fixes = [];
-var warnings = [];
 
 function log(msg) { console.log("  " + msg); }
 function logFix(msg) { fixes.push(msg); console.log("  [fix] " + msg); }
@@ -206,30 +205,16 @@ function fixPolyfills() {
   }
 }
 
-// scan for deprecated/removed imports that need manual fixes
-function scanProblematicImports() {
+// remove deprecated/removed imports from source files
+function fixDeprecatedImports() {
   log("scanning for deprecated imports...");
 
   // known problematic imports that were removed or never public
-  var problems = [
-    {
-      pattern: /import\s*\{[^}]*templateJitUrl[^}]*\}\s*from\s*['"]@angular\/compiler['"]/,
-      name: "templateJitUrl",
-      file: null,
-      hint: "templateJitUrl was internal jit compiler api, removed in angular 9+. refactor code to not use it."
-    },
-    {
-      pattern: /import\s*\{[^}]*DataService[^}]*\}\s*from\s*['"]@progress\/kendo-angular-dropdowns['"]/,
-      name: "DataService",
-      file: null,
-      hint: "DataService was internal kendo service, not public api. use component apis directly."
-    },
-    {
-      pattern: /import\s*\{[^}]*PagerContextService[^}]*\}\s*from\s*['"]@progress\/kendo-angular-grid['"]/,
-      name: "PagerContextService",
-      file: null,
-      hint: "PagerContextService is internal, use pager component inputs/outputs instead."
-    }
+  // these will be removed from the import statement
+  var deprecatedSymbols = [
+    { symbol: "templateJitUrl", module: "@angular/compiler" },
+    { symbol: "DataService", module: "@progress/kendo-angular-dropdowns" },
+    { symbol: "PagerContextService", module: "@progress/kendo-angular-grid" },
   ];
 
   var tsFiles = [];
@@ -249,24 +234,46 @@ function scanProblematicImports() {
 
   findTs("src");
 
-  var found = [];
+  var totalFixed = 0;
   tsFiles.forEach(function(file) {
     var content = fs.readFileSync(file, "utf8");
-    problems.forEach(function(p) {
-      if (p.pattern.test(content)) {
-        found.push({ name: p.name, file: file, hint: p.hint });
-      }
+    var original = content;
+
+    deprecatedSymbols.forEach(function(dep) {
+      // pattern to match import { ..., symbol, ... } from 'module'
+      var importPattern = new RegExp(
+        "import\\s*\\{([^}]*)\\}\\s*from\\s*['\"]" + dep.module.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + "['\"]\\s*;?",
+        "g"
+      );
+
+      content = content.replace(importPattern, function(match, imports) {
+        var symbols = imports.split(",").map(function(s) { return s.trim(); });
+        var filtered = symbols.filter(function(s) {
+          // handle "Symbol as Alias" syntax
+          var name = s.split(/\s+as\s+/)[0].trim();
+          return name !== dep.symbol;
+        });
+
+        if (filtered.length === 0) {
+          // all imports removed, delete the line
+          return "// removed: " + dep.symbol + " import (deprecated)";
+        } else if (filtered.length < symbols.length) {
+          // some imports removed, rebuild the import
+          return "import { " + filtered.join(", ") + " } from '" + dep.module + "';";
+        }
+        return match; // no change
+      });
     });
+
+    if (content !== original) {
+      fs.writeFileSync(file, content, "utf8");
+      totalFixed++;
+      logFix("removed deprecated imports from " + file);
+    }
   });
 
-  if (found.length === 0) {
+  if (totalFixed === 0) {
     logSkip("no deprecated imports found");
-  } else {
-    found.forEach(function(f) {
-      warnings.push(f.name + " in " + f.file);
-      console.log("  [warn] " + f.name + " import in " + f.file);
-      console.log("         " + f.hint);
-    });
   }
 }
 
@@ -283,18 +290,13 @@ function main() {
   fixTsconfig();
   fixSassImports();
   fixPolyfills();
-  scanProblematicImports();
+  fixDeprecatedImports();
 
   console.log("\n  ---");
-  if (fixes.length === 0 && warnings.length === 0) {
+  if (fixes.length === 0) {
     console.log("  no fixes needed");
   } else {
-    if (fixes.length > 0) {
-      console.log("  applied " + fixes.length + " fix(es)");
-    }
-    if (warnings.length > 0) {
-      console.log("  found " + warnings.length + " issue(s) requiring manual fix");
-    }
+    console.log("  applied " + fixes.length + " fix(es)");
     console.log("  run npm run build to check for remaining issues");
   }
 }

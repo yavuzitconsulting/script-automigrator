@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// fix-deps.js v19 - fixes deps after ng-upgrade-step.js
+// fix-deps.js v20 - fixes deps after ng-upgrade-step.js
 "use strict";
 
 var fs = require("fs");
@@ -419,6 +419,7 @@ function analyzeProject(angularMajor) {
       "@progress/kendo-angular-navigation",
       "@progress/kendo-angular-toolbar",
       "@progress/kendo-angular-label",
+      "@progress/kendo-angular-inputs",
       "@progress/kendo-angular-conversational-ui",
       "@progress/kendo-svg-icons",
     ];
