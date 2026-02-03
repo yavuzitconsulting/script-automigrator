@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// fix-deps.js v9
+// fix-deps.js v10
 // fixes third-party dependencies after ng-upgrade-step.js has run
 // bumps companion packages to versions compatible with the detected angular version
 "use strict";
@@ -9,7 +9,7 @@ var path = require("path");
 var child_process = require("child_process");
 var spawnSync = child_process.spawnSync;
 
-var SCRIPT_VERSION = 9;
+var SCRIPT_VERSION = 10;
 
 // ============================================================================
 // compatibility map
@@ -261,9 +261,8 @@ function fixAngularJson() {
     writeAngularJson(angularJson);
     console.log("\n  angular.json fixes applied:");
     changes.forEach(function (c) { console.log("    - " + c); });
-  } else {
-    console.log("  angular.json looks ok, no changes needed");
   }
+  return changed;
 }
 
 function detectAngularVersion() {
@@ -717,10 +716,7 @@ function main() {
   var analysis = analyzeProject(angularMajor);
   printReport(analysis, angularMajor);
 
-  var totalChanges = analysis.updates.length + analysis.kendoUpdates.length + analysis.removals.length + (analysis.overrideRemovals || []).length;
-  if (totalChanges === 0) {
-    process.exit(0);
-  }
+  var totalChanges = analysis.updates.length + analysis.kendoUpdates.length + analysis.removals.length + (analysis.overrideRemovals || []).length + (analysis.pinnedOverrides || []).length;
 
   var doApply = process.argv.includes("--yes") || process.argv.includes("--update");
   var doInstall = process.argv.includes("--yes");
@@ -728,18 +724,28 @@ function main() {
   var doResolve = !process.argv.includes("--no-resolve");
   var doVerbose = !process.argv.includes("--quiet");
 
+  // always check angular.json, even if no package.json changes
+  var angularJsonChanged = false;
+  if (doApply) {
+    angularJsonChanged = fixAngularJson();
+  }
+
+  if (totalChanges === 0 && !angularJsonChanged) {
+    console.log("\n  all dependencies look compatible with angular v" + angularMajor + ". nothing to do.");
+    process.exit(0);
+  }
+
   if (!doApply) {
     console.log("\n  dry run. use --yes to apply changes and install, or --update to just update package.json.");
     process.exit(0);
   }
 
   // apply package.json changes
-  console.log("\n  applying changes to package.json ...");
-  var changed = applyChanges(analysis, doResolve, doVerbose);
-  console.log("  updated " + changed + " entries.");
-
-  // fix angular.json
-  fixAngularJson();
+  if (totalChanges > 0) {
+    console.log("\n  applying changes to package.json ...");
+    var changed = applyChanges(analysis, doResolve, doVerbose);
+    console.log("  updated " + changed + " entries.");
+  }
 
   if (doInstall) {
     var ok = runNpmInstall();
