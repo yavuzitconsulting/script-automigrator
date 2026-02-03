@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// fix-deps.js v8
+// fix-deps.js v9
 // fixes third-party dependencies after ng-upgrade-step.js has run
 // bumps companion packages to versions compatible with the detected angular version
 "use strict";
@@ -9,7 +9,7 @@ var path = require("path");
 var child_process = require("child_process");
 var spawnSync = child_process.spawnSync;
 
-var SCRIPT_VERSION = 8;
+var SCRIPT_VERSION = 9;
 
 // ============================================================================
 // compatibility map
@@ -195,6 +195,16 @@ function fixAngularJson() {
   var changed = false;
   var changes = [];
 
+  // deprecated options to remove from build targets
+  var deprecatedOptions = [
+    "extractCss",        // removed in Angular 11+, CSS extracted by default
+    "vendorChunk",       // removed in Angular 17+
+    "commonChunk",       // removed in Angular 17+
+    "buildOptimizer",    // removed in Angular 17+
+    "es5BrowserSupport", // removed in Angular 10+
+    "deployUrl",         // deprecated in Angular 13+
+  ];
+
   // remove defaultProject (deprecated in Angular 15+)
   if (angularJson.defaultProject !== undefined) {
     delete angularJson.defaultProject;
@@ -202,7 +212,7 @@ function fixAngularJson() {
     changes.push("removed deprecated 'defaultProject'");
   }
 
-  // update builders from :browser to :application
+  // update builders from :browser to :application and remove deprecated options
   if (angularJson.projects) {
     Object.keys(angularJson.projects).forEach(function (projectName) {
       var project = angularJson.projects[projectName];
@@ -216,11 +226,31 @@ function fixAngularJson() {
               changed = true;
               changes.push(projectName + "." + targetName + ": browser -> application builder");
             }
-            // update to new @angular/build package (optional, for full migration)
-            // if (target.builder === "@angular-devkit/build-angular:application") {
-            //   target.builder = "@angular/build:application";
-            //   changed = true;
-            // }
+          }
+
+          // remove deprecated options from all targets
+          if (target.options) {
+            deprecatedOptions.forEach(function (opt) {
+              if (target.options[opt] !== undefined) {
+                delete target.options[opt];
+                changed = true;
+                changes.push(projectName + "." + targetName + ": removed deprecated '" + opt + "'");
+              }
+            });
+          }
+
+          // also check configurations (production, development, etc.)
+          if (target.configurations) {
+            Object.keys(target.configurations).forEach(function (configName) {
+              var config = target.configurations[configName];
+              deprecatedOptions.forEach(function (opt) {
+                if (config[opt] !== undefined) {
+                  delete config[opt];
+                  changed = true;
+                  changes.push(projectName + "." + targetName + "." + configName + ": removed deprecated '" + opt + "'");
+                }
+              });
+            });
           }
         });
       }
