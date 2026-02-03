@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// fix-deps.js v17 - fixes deps after ng-upgrade-step.js
+// fix-deps.js v18 - fixes deps after ng-upgrade-step.js
 "use strict";
 
 var fs = require("fs");
@@ -521,8 +521,8 @@ function cleanBeforeInstall() {
 
 function runNpmInstall() {
   cleanBeforeInstall();
-  console.log("\n  npm install --force --legacy-peer-deps --omit=optional\n");
-  var res = spawnSync("npm", ["install", "--force", "--legacy-peer-deps", "--omit=optional"], {
+  console.log("\n  npm install --force --legacy-peer-deps\n");
+  var res = spawnSync("npm", ["install", "--force", "--legacy-peer-deps"], {
     stdio: "inherit", shell: true, timeout: 600000, cwd: process.cwd()
   });
 
@@ -534,7 +534,7 @@ function runNpmInstall() {
     if (hasKendoLicensing) {
       console.log("\n  npm install failed, likely kendo license issue");
       console.log("  retrying with --ignore-scripts to ensure packages are installed...\n");
-      var retry = spawnSync("npm", ["install", "--force", "--legacy-peer-deps", "--omit=optional", "--ignore-scripts"], {
+      var retry = spawnSync("npm", ["install", "--force", "--legacy-peer-deps", "--ignore-scripts"], {
         stdio: "inherit", shell: true, timeout: 600000, cwd: process.cwd()
       });
       if (retry.status === 0) {
