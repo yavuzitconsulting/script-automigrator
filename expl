@@ -1,0 +1,51 @@
+Was dieses Skript ist
+---------------------
+Ein  Orchestrator fuer Angular-Major-Upgrades 
+in unsere eingeschränkten Umgebung
+(npm registry mit fehlenden paketen, nur Node 14 und 22). 
+Das hier ist komplett Node 22, behebt fehlende Versionen per Overrides,
+ installiert pro Schritt die exakt passende ANgular CLI in einen Temp-Ordner, 
+ führt  Migrationen direkt aus (ohne `ng update`) und setzt manuelle Fallbacks fuer bekannte Schematic-Bugs ein.
+
+ng-upgrade-step.js - was es tut
+--------------------------------
+- Upgrade in einzelnen schritten durch die Angular-Majors 8→20. 
+Fuer die aktuelle  @angular/core-version wählt es einen passenden eintrag aus einem json dataset dass ich angelegt habe
+, schreibt package.json um (Phase 1), 
+macht  npm install mit aggressiver Retry/Override-Logik  (Phase 2) 
+ startet dann die Migrationen des Schritts per direktem Schematics-call (Phase 3). 
+ 
+ es gibt .ng-upgrade-progress.json sodass es beim abstruz oder teilmigration auch weiter gehen kann.
+ Temporare CLI fuer Schematics: jeder Schritt installiert  @angular/cli@<step.cliVersion> in .ng-cli-temp mit derselben Node-22- plus Registry-Fix-Logik, statt ng update weil das nicht funtkioniert weil ng update alle settings und overrides ignoriert
+- FÜR UNSERE ANGULAR Visual STudio Projekte:
+ Patcht angular.json/tsconfig mit relativen Pfaden vor den Schematics, stellt Backups danach wieder her; 
+ checkt ob installierte TypeScript-Version zur gepinnten Version des Schritts passt, und versucht sie andernfalls zu korrigieren;
+ 
+
+Warum es auf Node 22 auch mit alten Angular-Versionen funktioniert (NODE GUARD)
+-----------------------------------------------------------------
+- alte Angular-CLIs brechen im bin/ng-Guard wegen falscher Node-Version ab. Dieses Skript ruft diesen Einstiegspunkt nie auf. Phase 3 läd @angular-devkit/schematics direkt ueber einen generierten Runner (.ng-schematic-runner.js) und einen ScopedHost, sodass der Node-Versions-Guard in bin/ng umgangen wird.
+
+Versionswahl, wenn die angeforderte fehlt
+----------------------------------------
+- Quelle der „angeforderten“ Version: aus der ETARGET/E404-Meldung von npm extrahiert (parseMissingPackage) oder aus der vorhandenen Semver-Spezifikation des Projekts (z. B. ^9.1.0 → bereinigt zu 9.1.0).
+- Auswahlregeln in findBestVersion:
+  1) die niedrigste Version im gleichen Major, die >= der bereinigten angeforderten Version ist.
+  3) Wenn es gar keine Versionen im selben Major gibt, die hoechste verfuegbare in diesem Major (falls vorhanden).
+  4) Sonst die niedrigste Version >= angefordert ueber alle Majors.
+  5) Ansonsten die neueste verfuegbare.
+- Durchsetzung: Die  Version wird im package json fixiert in dependencies geschrieben und mit einem $ref in overrides gespiegelt. 
+
+
+einige der fixes
+----------------------------------------------------------------------------------------------------
+1) v15 migration-v15-relative-link-resolution — entfernt relativeLinkResolution aus RouterModule.forRoot.
+2) v16 migration-v16-remove-module-id — entfernt moduleId: module.id in Dekoratoren.
+3) v16 migration-v16-guard-and-resolve-interfaces — entfernt veraltete Router Guard/Resolver Interfaces aus implements/imports.
+4) v17 block-template-entities — warnt bei Template-Zeilen, die mit @ beginnen (moeglicherweise manuell escapen).
+5) v17 invalid-two-way-bindings — scannt/markiert ungueltige [(...)]-Bindings (selten, informativ).
+6) v18 migration-http-providers — ersetzt HttpClientModule/HttpClientTestingModule durch provideHttpClient(withInterceptorsFromDi()) / provideHttpClientTesting(); aktualisiert Imports/Providers.
+7) v18 migration-after-render-phase — schreibt afterRender/afterNextRender mit { phase: AfterRenderPhase.X } in die Spec-Objekt-Form um; bereinigt Imports.
+8) v19 explicit-standalone-flag — entfernt redundantes standalone: true; fuegt standalone: false hinzu, wo noetig, in NgModule-Declarations.
+9) v19 pending-tasks — benennt ExperimentalPendingTasks in PendingTasks um (Imports/Verwendungen).
+10) v19 provide-initializer — ersetzt APP/ENVIRONMENT/PLATFORM_INITIALIZER-Provider durch provideAppInitializer/provideEnvironmentInitializer/providePlatformInitializer; bereinigt Imports.
