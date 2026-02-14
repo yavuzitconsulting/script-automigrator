@@ -3,7 +3,7 @@
 var fs = require("fs");
 var path = require("path");
 
-var VERSION = 10;
+var VERSION = 11;
 var fixes = [];
 
 function log(msg) { console.log("  " + msg); }
@@ -59,6 +59,15 @@ function findTsconfigFiles() {
     if (fs.existsSync(p)) candidates.push(p);
   });
 
+  // auch rekursiv nach tsconfig*.json suchen fuer projekte mit ungewoehnlicher struktur
+  var found = findFiles(".", /^tsconfig[^/]*\.json$/);
+  found.forEach(function (f) {
+    var norm = path.normalize(f);
+    if (candidates.indexOf(norm) === -1) {
+      candidates.push(norm);
+    }
+  });
+
   if (fs.existsSync("angular.json")) {
     var aj = readJson("angular.json");
     if (aj && aj.projects) {
@@ -88,6 +97,13 @@ var symbolFixes = [
   { module: "@angular/compiler", symbol: "templateJitUrl", action: "remove" },
   { module: "@progress/kendo-angular-dropdowns", symbol: "DataService", action: "remove" },
   { module: "@progress/kendo-angular-grid", symbol: "PagerContextService", action: "rename", newName: "ContextService" }
+];
+
+// --- konfiguration: symbole die aus ngmodule providers entfernt werden sollen ---
+// wenn das symbol nicht mehr importierbar ist, muss es auch aus providers raus
+
+var providerRemovals = [
+  { symbol: "DataService", module: "@progress/kendo-angular-dropdowns", reason: "removed in newer kendo versions" }
 ];
 
 // --- konfiguration: kendo selektor -> modul zuordnung ---
@@ -478,6 +494,155 @@ function removePolyfillsFromAngularJson() {
   return changed;
 }
 
+// --- verwaiste polyfills.ts referenzen aus tsconfig files-arrays entfernen ---
+// ergaenzung: tsconfig.app.json kann "files": ["src/main.ts", "src/polyfills.ts"] enthalten
+
+function fixPolyfillsTsconfigReferences() {
+  log("checking stale polyfills.ts references in tsconfig files...");
+
+  if (fs.existsSync("src/polyfills.ts")) {
+    logSkip("polyfills.ts exists, skipping tsconfig cleanup");
+    return;
+  }
+
+  var files = findTsconfigFiles();
+  var totalFixed = 0;
+
+  files.forEach(function (file) {
+    var ts = readJson(file);
+    if (!ts || !ts.files || !Array.isArray(ts.files)) return;
+
+    var originalLen = ts.files.length;
+
+    ts.files = ts.files.filter(function (f) {
+      // polyfills.ts und polyfills.ngtypecheck.ts entfernen wenn datei nicht existiert
+      if (/polyfills[^/]*\.ts$/.test(f)) {
+        var dir = path.dirname(file);
+        var resolved = path.resolve(dir, f);
+        if (!fs.existsSync(resolved)) {
+          log("  " + file + ": entferne verwaiste polyfills-referenz: " + f);
+          return false;
+        }
+      }
+      return true;
+    });
+
+    if (ts.files.length < originalLen) {
+      if (ts.files.length === 0) delete ts.files;
+      writeJson(file, ts);
+      totalFixed++;
+      logFix(file + ": removed stale polyfills.ts reference(s)");
+    }
+  });
+
+  if (totalFixed === 0) logSkip("no stale polyfills.ts references in tsconfig files");
+}
+
+// --- HttpClientModule migration: deprecated -> provideHttpClient(withInterceptorsFromDi()) ---
+
+function fixHttpClientModule() {
+  log("checking for deprecated HttpClientModule usage...");
+
+  var moduleFiles = findFiles("src", /\.module\.ts$/);
+  var totalFixed = 0;
+
+  moduleFiles.forEach(function (file) {
+    var content = fs.readFileSync(file, "utf8");
+    var original = content;
+
+    // pruefen ob HttpClientModule verwendet wird
+    if (content.indexOf("HttpClientModule") === -1) return;
+
+    // --- schritt 1: HttpClientModule aus imports-array des @NgModule entfernen ---
+    var ngModuleImports = findNgModuleArray(content, "imports");
+    if (ngModuleImports) {
+      content = removeSymbolFromNgModuleArray(content, ngModuleImports, "HttpClientModule");
+    }
+
+    // --- schritt 2: HttpClientModule aus exports-array des @NgModule entfernen ---
+    var ngModuleExports = findNgModuleArray(content, "exports");
+    if (ngModuleExports) {
+      // nach schritt 1 neu parsen da sich positionen verschoben haben koennten
+      ngModuleExports = findNgModuleArray(content, "exports");
+      if (ngModuleExports) {
+        content = removeSymbolFromNgModuleArray(content, ngModuleExports, "HttpClientModule");
+      }
+    }
+
+    // --- schritt 3: sicherstellen dass provideHttpClient(withInterceptorsFromDi()) in providers ist ---
+    var hasProvideHttpClient = /provideHttpClient\s*\(/.test(content);
+    if (!hasProvideHttpClient) {
+      var ngModuleProviders = findNgModuleArray(content, "providers");
+      if (ngModuleProviders) {
+        var before = content.slice(0, ngModuleProviders.closePos);
+        var after = content.slice(ngModuleProviders.closePos);
+        var trimmed = before.trimEnd();
+        var needsComma = /[\w)\]"']$/.test(trimmed);
+        content = trimmed + (needsComma ? "," : "") + "\n    provideHttpClient(withInterceptorsFromDi())" + "\n  " + after.trimStart();
+      }
+    }
+
+    // --- schritt 4: ts-import anpassen ---
+    // HttpClientModule import entfernen, provideHttpClient + withInterceptorsFromDi sicherstellen
+    var httpImportPattern = /import\s*\{([^}]+)\}\s*from\s*['"]@angular\/common\/http['"]\s*;?/;
+    var httpMatch = httpImportPattern.exec(content);
+
+    if (httpMatch) {
+      var symbols = httpMatch[1].split(",").map(function (s) { return s.trim(); }).filter(Boolean);
+
+      // HttpClientModule entfernen
+      symbols = symbols.filter(function (s) {
+        return s.split(/\s+as\s+/)[0].trim() !== "HttpClientModule";
+      });
+
+      // provideHttpClient und withInterceptorsFromDi hinzufuegen wenn nicht vorhanden
+      var hasProvide = symbols.some(function (s) { return s.split(/\s+as\s+/)[0].trim() === "provideHttpClient"; });
+      var hasWithInterceptors = symbols.some(function (s) { return s.split(/\s+as\s+/)[0].trim() === "withInterceptorsFromDi"; });
+
+      if (!hasProvide) symbols.push("provideHttpClient");
+      if (!hasWithInterceptors) symbols.push("withInterceptorsFromDi");
+
+      content = content.replace(httpMatch[0],
+        "import { " + symbols.join(", ") + " } from '@angular/common/http';"
+      );
+    } else {
+      // kein @angular/common/http import vorhanden, aber HttpClientModule wird verwendet
+      // -> import hinzufuegen und HttpClientModule referenz bereinigen
+      if (content.indexOf("provideHttpClient") === -1) {
+        var importLine = "import { provideHttpClient, withInterceptorsFromDi } from '@angular/common/http';";
+        var lines = content.split("\n");
+        var lastImportLine = -1;
+        for (var i = 0; i < lines.length; i++) {
+          if (/^\s*import\s/.test(lines[i])) {
+            var j = i;
+            while (j < lines.length && lines[j].indexOf(";") === -1) j++;
+            lastImportLine = j;
+          }
+        }
+        if (lastImportLine >= 0) {
+          lines.splice(lastImportLine + 1, 0, importLine);
+        } else {
+          lines.unshift(importLine);
+        }
+        content = lines.join("\n");
+      }
+    }
+
+    // --- schritt 5: verwaiste HttpClientModule referenzen bereinigen ---
+    // falls nach den array-aenderungen noch ein nacktes HttpClientModule im code steht
+    // das nicht teil eines imports ist, ist es ein fehler -> entfernen aus deklarationen
+    // (wird bereits durch die array-entfernung oben abgedeckt)
+
+    if (content !== original) {
+      fs.writeFileSync(file, content, "utf8");
+      totalFixed++;
+      logFix("migrated HttpClientModule -> provideHttpClient(withInterceptorsFromDi()) in " + file);
+    }
+  });
+
+  if (totalFixed === 0) logSkip("no HttpClientModule migration needed");
+}
+
 // --- veraltete/umbenannte imports erkennen und beheben ---
 
 function fixDeprecatedImports() {
@@ -564,6 +729,57 @@ function fixDeprecatedImports() {
   });
 
   if (totalFixed === 0) logSkip("no deprecated imports found");
+}
+
+// --- entfernte symbole aus ngmodule providers-arrays bereinigen ---
+
+function fixRemovedProviders() {
+  log("checking for removed symbols in NgModule providers...");
+
+  var moduleFiles = findFiles("src", /\.module\.ts$/);
+  var totalFixed = 0;
+
+  moduleFiles.forEach(function (file) {
+    var content = fs.readFileSync(file, "utf8");
+    var original = content;
+
+    providerRemovals.forEach(function (removal) {
+      // nur entfernen wenn das symbol NICHT lokal definiert oder aus einer anderen quelle importiert wird
+      // pruefen: ist das symbol aus dem bekannten (entfernten) paket importiert oder gar nicht importiert?
+      var escapedModule = removal.module.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      var escapedSymbol = removal.symbol.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+      // pruefen ob das symbol aus einer ANDEREN quelle importiert wird (dann nicht anfassen)
+      var anyImportPattern = new RegExp(
+        "import\\s*\\{[^}]*\\b" + escapedSymbol + "\\b[^}]*\\}\\s*from\\s*['\"]([^'\"]+)['\"]"
+      );
+      var anyImportMatch = anyImportPattern.exec(content);
+
+      if (anyImportMatch) {
+        var importSource = anyImportMatch[1];
+        // wenn es von einer anderen quelle kommt, nicht anfassen
+        if (importSource !== removal.module) {
+          return;
+        }
+      }
+
+      // symbol ist entweder vom entfernten paket importiert oder gar nicht importiert
+      // -> aus providers entfernen
+      var ngModuleProviders = findNgModuleArray(content, "providers");
+      if (ngModuleProviders && ngModuleProviders.items.indexOf(removal.symbol) !== -1) {
+        content = removeSymbolFromNgModuleArray(content, ngModuleProviders, removal.symbol);
+        log("  " + file + ": removed " + removal.symbol + " from providers (" + removal.reason + ")");
+      }
+    });
+
+    if (content !== original) {
+      fs.writeFileSync(file, content, "utf8");
+      totalFixed++;
+      logFix("cleaned up removed providers in " + file);
+    }
+  });
+
+  if (totalFixed === 0) logSkip("no removed providers to clean up");
 }
 
 // --- fehlende kendo module in ngmodules erkennen und einfügen ---
@@ -710,16 +926,26 @@ function addModuleImport(content, moduleName, packageName) {
 
 // ngmodule imports-array finden (mit verschachtelten klammern)
 function findNgModuleImportsArray(content) {
+  return findNgModuleArray(content, "imports");
+}
+
+// generisch: beliebiges ngmodule array finden (imports, exports, providers, declarations)
+function findNgModuleArray(content, arrayName) {
   var ngModuleIdx = content.indexOf("@NgModule");
   if (ngModuleIdx === -1) return null;
 
   var braceStart = content.indexOf("{", ngModuleIdx);
   if (braceStart === -1) return null;
 
-  var importsKeyPattern = /\bimports\s*:\s*\[/g;
-  importsKeyPattern.lastIndex = braceStart;
-  var match = importsKeyPattern.exec(content);
-  if (!match) return null;
+  // ngmodule objekt-ende finden (verschachtelte klammern beachten)
+  var ngModuleEnd = findMatchingBrace(content, braceStart);
+  if (ngModuleEnd === -1) return null;
+
+  var escapedName = arrayName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  var keyPattern = new RegExp("\\b" + escapedName + "\\s*:\\s*\\[", "g");
+  keyPattern.lastIndex = braceStart;
+  var match = keyPattern.exec(content);
+  if (!match || match.index > ngModuleEnd) return null;
 
   var arrayStart = match.index + match[0].length;
 
@@ -748,6 +974,55 @@ function findNgModuleImportsArray(content) {
   return { startPos: arrayStart, closePos: closePos, items: items };
 }
 
+function findMatchingBrace(content, openPos) {
+  var depth = 1;
+  var pos = openPos + 1;
+  while (pos < content.length && depth > 0) {
+    var ch = content[pos];
+    if (ch === "{") depth++;
+    else if (ch === "}") depth--;
+    else if (ch === "'" || ch === '"' || ch === "`") {
+      var quote = ch;
+      pos++;
+      while (pos < content.length && content[pos] !== quote) {
+        if (content[pos] === "\\") pos++;
+        pos++;
+      }
+    }
+    pos++;
+  }
+  return depth === 0 ? pos - 1 : -1;
+}
+
+// symbol aus einem ngmodule array entfernen (imports, exports, providers)
+function removeSymbolFromNgModuleArray(content, arrayInfo, symbolName) {
+  var items = arrayInfo.items;
+
+  // einfache symbole (kein objekt-literal, kein funktionsaufruf) aus dem array entfernen
+  // pattern: symbolName mit optionalem komma davor/danach und whitespace
+  var escapedSym = symbolName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  // das symbol im array-inhalt finden und entfernen
+  var symPattern = new RegExp(
+    "(?:,\\s*)?\\b" + escapedSym + "\\b\\s*,?|\\b" + escapedSym + "\\b\\s*,?"
+  );
+
+  var newItems = items.replace(symPattern, "");
+
+  // fuehrende/abschliessende kommas bereinigen
+  newItems = newItems.replace(/^\s*,/, "").replace(/,\s*$/, "");
+
+  // leere zeilen am anfang/ende bereinigen
+  newItems = newItems.replace(/^\s*\n/, "").replace(/\n\s*$/, "");
+
+  var newContent =
+    content.slice(0, arrayInfo.startPos) +
+    newItems +
+    content.slice(arrayInfo.closePos);
+
+  return newContent;
+}
+
 // --- hauptprogramm ---
 
 function main() {
@@ -764,7 +1039,10 @@ function main() {
   fixKendoThemePaths();
   fixPolyfills();
   fixPolyfillsReferences();
+  fixPolyfillsTsconfigReferences();
+  fixHttpClientModule();
   fixDeprecatedImports();
+  fixRemovedProviders();
   fixMissingKendoModuleImports();
 
   console.log("\n---");
