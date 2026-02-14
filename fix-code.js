@@ -359,7 +359,7 @@ function fixKendoThemePaths() {
             content = content.replace(m, allScssImport);
             firstReplaced = true;
           } else {
-            content = content.replace(m, "// [fix-code] konsolidiert in " + themePkg + "/scss/all.scss");
+            content = content.replace(m, "");
           }
         });
       } else {
@@ -386,10 +386,10 @@ function fixKendoThemePaths() {
           }
 
           if (!resolved && !hasAllImport) {
-            content = content.replace(m, allScssImport + " // war: " + origPath.split("/").pop());
+            content = content.replace(m, allScssImport);
             hasAllImport = true;
           } else if (!resolved) {
-            content = content.replace(m, "// [fix-code] entfernt (nicht auflösbar): " + origPath);
+            content = content.replace(m, "");
           }
         });
       }
@@ -500,24 +500,38 @@ function removePolyfillsFromAngularJson() {
 function fixPolyfillsTsconfigReferences() {
   log("checking stale polyfills.ts references in tsconfig files...");
 
-  if (fs.existsSync("src/polyfills.ts")) {
-    logSkip("polyfills.ts exists, skipping tsconfig cleanup");
-    return;
-  }
-
+  // alle tsconfig dateien finden (auch in unterverzeichnissen und ueber angular.json)
   var files = findTsconfigFiles();
+
+  // zusaetzlich auch in src/ und projektroot nach tsconfig dateien suchen
+  var extraDirs = [".", "src", "ClientApp"];
+  extraDirs.forEach(function (dir) {
+    if (!fs.existsSync(dir)) return;
+    try {
+      var entries = fs.readdirSync(dir);
+      entries.forEach(function (entry) {
+        if (/^tsconfig.*\.json$/.test(entry)) {
+          var full = path.normalize(path.join(dir, entry));
+          if (files.indexOf(full) === -1) {
+            files.push(full);
+          }
+        }
+      });
+    } catch (e) {}
+  });
+
   var totalFixed = 0;
 
   files.forEach(function (file) {
     var ts = readJson(file);
     if (!ts || !ts.files || !Array.isArray(ts.files)) return;
 
+    var dir = path.dirname(file);
     var originalLen = ts.files.length;
 
     ts.files = ts.files.filter(function (f) {
-      // polyfills.ts und polyfills.ngtypecheck.ts entfernen wenn datei nicht existiert
+      // polyfills varianten erkennen: polyfills.ts, polyfills.ngtypecheck.ts etc.
       if (/polyfills[^/]*\.ts$/.test(f)) {
-        var dir = path.dirname(file);
         var resolved = path.resolve(dir, f);
         if (!fs.existsSync(resolved)) {
           log("  " + file + ": entferne verwaiste polyfills-referenz: " + f);
@@ -706,7 +720,7 @@ function fixDeprecatedImports() {
 
           if (filtered.length === 0) {
             content = content.replace(fullMatch,
-              "// [fix-code] entfernt: " + fix.symbol + " (nicht mehr in " + fix.module + ")"
+              ""
             );
           } else {
             content = content.replace(fullMatch,
@@ -716,7 +730,7 @@ function fixDeprecatedImports() {
 
           // typ-referenzen durch any ersetzen
           var typePattern = new RegExp("(:\\s*)" + symEscaped + "\\b", "g");
-          content = content.replace(typePattern, "$1any /* " + fix.symbol + " entfernt */");
+          content = content.replace(typePattern, "$1any");
         }
       }
     });
@@ -997,23 +1011,53 @@ function findMatchingBrace(content, openPos) {
 // symbol aus einem ngmodule array entfernen (imports, exports, providers)
 function removeSymbolFromNgModuleArray(content, arrayInfo, symbolName) {
   var items = arrayInfo.items;
-
-  // einfache symbole (kein objekt-literal, kein funktionsaufruf) aus dem array entfernen
-  // pattern: symbolName mit optionalem komma davor/danach und whitespace
   var escapedSym = symbolName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-  // das symbol im array-inhalt finden und entfernen
-  var symPattern = new RegExp(
-    "(?:,\\s*)?\\b" + escapedSym + "\\b\\s*,?|\\b" + escapedSym + "\\b\\s*,?"
-  );
+  // array-inhalt zeilenweise verarbeiten fuer saubere entfernung
+  var lines = items.split("\n");
+  var filteredLines = [];
+  var removed = false;
 
-  var newItems = items.replace(symPattern, "");
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i];
+    // pruefen ob diese zeile das symbol als eigenstaendigen eintrag enthaelt
+    // (nicht als teil eines laengeren namens dank \b)
+    var symOnlyPattern = new RegExp("^\\s*\\b" + escapedSym + "\\b\\s*,?\\s*$");
+    if (symOnlyPattern.test(line) && !removed) {
+      removed = true;
+      // zeile komplett ueberspringen
+      continue;
+    }
+    filteredLines.push(line);
+  }
 
-  // fuehrende/abschliessende kommas bereinigen
-  newItems = newItems.replace(/^\s*,/, "").replace(/,\s*$/, "");
+  if (!removed) {
+    // symbol ist inline (gleiche zeile mit anderen symbolen) -> regex-basiert entfernen
+    // fall 1: symbol am anfang mit komma danach -> "Symbol, Next" -> "Next"
+    var inlinePattern1 = new RegExp("\\b" + escapedSym + "\\b\\s*,\\s*");
+    // fall 2: symbol nach komma -> "Prev, Symbol" -> "Prev"
+    var inlinePattern2 = new RegExp(",\\s*\\b" + escapedSym + "\\b");
 
-  // leere zeilen am anfang/ende bereinigen
-  newItems = newItems.replace(/^\s*\n/, "").replace(/\n\s*$/, "");
+    var newItems = items;
+    if (inlinePattern1.test(newItems)) {
+      newItems = newItems.replace(inlinePattern1, "");
+    } else {
+      newItems = newItems.replace(inlinePattern2, "");
+    }
+
+    var newContent =
+      content.slice(0, arrayInfo.startPos) +
+      newItems +
+      content.slice(arrayInfo.closePos);
+
+    return newContent;
+  }
+
+  var newItems = filteredLines.join("\n");
+
+  // abschliessendes komma beim letzten echten eintrag bereinigen falls noetig
+  // (wenn das entfernte symbol das letzte war, hat der vorherige jetzt ein trailing comma)
+  newItems = newItems.replace(/,(\s*)$/, "$1");
 
   var newContent =
     content.slice(0, arrayInfo.startPos) +
