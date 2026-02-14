@@ -195,7 +195,7 @@ function fixBrowserslist() {
   }
 }
 
-// --- tsconfig: veraltete optionen + fehlende datei-referenzen bereinigen ---
+// --- tsconfig: veraltete optionen bereinigen ---
 
 function fixTsconfig() {
   log("checking tsconfig files...");
@@ -410,7 +410,7 @@ function fixKendoThemePaths() {
   if (totalFixed === 0) logSkip("no kendo theme path fixes needed");
 }
 
-// --- polyfills.ts: zone.js pfade aktualisieren, triviale datei löschen ---
+// --- polyfills.ts: zone.js pfade aktualisieren (datei und referenzen beibehalten) ---
 
 function fixPolyfills() {
   log("checking polyfills.ts...");
@@ -431,125 +431,9 @@ function fixPolyfills() {
   if (content !== original) {
     fs.writeFileSync(file, content, "utf8");
     logFix("updated zone.js import paths in polyfills.ts");
-  }
-
-  var clean = content.replace(/\/\*[\s\S]*?\*\/|\/\/.*/g, "").trim();
-
-  if (/^import\s+['"]zone\.js['"];?$/.test(clean) || clean === "") {
-    fs.unlinkSync(file);
-    logFix("deleted polyfills.ts (zone.js wird automatisch importiert)");
-    removePolyfillsFromAngularJson();
   } else {
-    logSkip("polyfills.ts hat eigene polyfills, wird beibehalten");
+    logSkip("polyfills.ts ok");
   }
-}
-
-// --- verwaiste polyfills.ts referenzen aus angular.json entfernen ---
-
-function fixPolyfillsReferences() {
-  log("checking stale polyfills.ts references...");
-
-  if (fs.existsSync("src/polyfills.ts")) {
-    logSkip("polyfills.ts exists");
-    return;
-  }
-
-  var anyFixed = removePolyfillsFromAngularJson();
-  if (!anyFixed) logSkip("no stale polyfills.ts references in angular.json");
-}
-
-function removePolyfillsFromAngularJson() {
-  if (!fs.existsSync("angular.json")) return false;
-
-  var aj = readJson("angular.json");
-  if (!aj || !aj.projects) return false;
-
-  var changed = false;
-
-  Object.keys(aj.projects).forEach(function (proj) {
-    var p = aj.projects[proj];
-
-    ["build", "test", "serve"].forEach(function (target) {
-      var opts = p.architect && p.architect[target] && p.architect[target].options;
-      if (!opts || !opts.polyfills) return;
-
-      if (Array.isArray(opts.polyfills)) {
-        var idx = opts.polyfills.indexOf("src/polyfills.ts");
-        if (idx !== -1) {
-          opts.polyfills.splice(idx, 1);
-          changed = true;
-        }
-        if (opts.polyfills.length === 0) delete opts.polyfills;
-      } else if (opts.polyfills === "src/polyfills.ts") {
-        delete opts.polyfills;
-        changed = true;
-      }
-    });
-  });
-
-  if (changed) {
-    writeJson("angular.json", aj);
-    logFix("removed polyfills.ts references from angular.json");
-  }
-  return changed;
-}
-
-// --- verwaiste polyfills.ts referenzen aus tsconfig files-arrays entfernen ---
-// ergaenzung: tsconfig.app.json kann "files": ["src/main.ts", "src/polyfills.ts"] enthalten
-
-function fixPolyfillsTsconfigReferences() {
-  log("checking stale polyfills.ts references in tsconfig files...");
-
-  // alle tsconfig dateien finden (auch in unterverzeichnissen und ueber angular.json)
-  var files = findTsconfigFiles();
-
-  // zusaetzlich auch in src/ und projektroot nach tsconfig dateien suchen
-  var extraDirs = [".", "src", "ClientApp"];
-  extraDirs.forEach(function (dir) {
-    if (!fs.existsSync(dir)) return;
-    try {
-      var entries = fs.readdirSync(dir);
-      entries.forEach(function (entry) {
-        if (/^tsconfig.*\.json$/.test(entry)) {
-          var full = path.normalize(path.join(dir, entry));
-          if (files.indexOf(full) === -1) {
-            files.push(full);
-          }
-        }
-      });
-    } catch (e) {}
-  });
-
-  var totalFixed = 0;
-
-  files.forEach(function (file) {
-    var ts = readJson(file);
-    if (!ts || !ts.files || !Array.isArray(ts.files)) return;
-
-    var dir = path.dirname(file);
-    var originalLen = ts.files.length;
-
-    ts.files = ts.files.filter(function (f) {
-      // polyfills varianten erkennen: polyfills.ts, polyfills.ngtypecheck.ts etc.
-      if (/polyfills[^/]*\.ts$/.test(f)) {
-        var resolved = path.resolve(dir, f);
-        if (!fs.existsSync(resolved)) {
-          log("  " + file + ": entferne verwaiste polyfills-referenz: " + f);
-          return false;
-        }
-      }
-      return true;
-    });
-
-    if (ts.files.length < originalLen) {
-      if (ts.files.length === 0) delete ts.files;
-      writeJson(file, ts);
-      totalFixed++;
-      logFix(file + ": removed stale polyfills.ts reference(s)");
-    }
-  });
-
-  if (totalFixed === 0) logSkip("no stale polyfills.ts references in tsconfig files");
 }
 
 // --- HttpClientModule migration: deprecated -> provideHttpClient(withInterceptorsFromDi()) ---
@@ -1082,8 +966,6 @@ function main() {
   fixSassImports();
   fixKendoThemePaths();
   fixPolyfills();
-  fixPolyfillsReferences();
-  fixPolyfillsTsconfigReferences();
   fixHttpClientModule();
   fixDeprecatedImports();
   fixRemovedProviders();
